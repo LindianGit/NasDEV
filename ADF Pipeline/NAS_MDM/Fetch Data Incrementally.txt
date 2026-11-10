@@ -1,0 +1,583 @@
+This pipeline is actually quite well structured for a metadata-driven ingestion framework. Here's what it's doing from an interview/implementation-review perspective.
+
+High-Level Flow
+Get API Key (Key Vault)
+        |
+Store API Key
+        |
+Login (OAuth Token)
+        |
+Fetch Config (JSON)
+        |
+ForEach Endpoint
+        |
+Copy REST -> Blob Storage
+
+Step 1: Retrieve Credentials Securely
+Get API Key
+"authentication": {
+    "type": "MSI",
+    "resource": "https://vault.azure.net"
+}
+
+
+Uses the ADF Managed Identity to retrieve a secret from Azure Key Vault.
+
+Secret retrieved:
+
+cezanne-auth-header
+
+
+This appears to contain:
+
+Base64(clientid:secret)
+
+
+for OAuth authentication.
+
+Good practice because credentials are never hardcoded.
+
+Store API Key as Auth Header
+@concat('Basic ', activity('Get API Key').output.value)
+
+
+Creates:
+
+Authorization: Basic xxxxxxxxx
+
+
+and stores it in a variable for reuse.
+
+Step 2: Authenticate Against Cezanne
+Login Activity
+POST /OAuth/Token
+
+
+Headers:
+
+Content-Type: application/x-www-form-urlencoded
+Authorization: Basic xxxxx
+
+
+Body:
+
+scope=APIRead
+grant_type=client_credentials
+
+
+This is standard OAuth Client Credentials Flow.
+
+Response:
+
+{
+  "access_token": "...",
+  "token_type": "Bearer",
+  "expires_in": 3600
+}
+
+Step 3: Read Configuration
+Fetch Config
+
+Reads:
+
+pipeline-config.json
+
+
+from Blob Storage.
+
+Instead of hardcoding endpoints into the pipeline.
+
+Likely contains something like:
+
+[
+  {
+    "url":"Employees",
+    "filename":"employees.json",
+    "days":1,
+    "filter":"LastModifiedDate"
+  },
+  {
+    "url":"Absences",
+    "filename":"absences.json",
+    "days":1,
+    "filter":"UpdatedDate"
+  }
+]
+
+
+This is an excellent metadata-driven design.
+
+To add a new endpoint:
+
+Edit JSON
+Do not edit pipeline
+
+Step 4: Parallel Processing
+ForEach Loop
+"isSequential": false,
+"batchCount": 10
+
+
+Meaning:
+
+Up to 10 endpoints fetched simultaneously
+
+
+This significantly reduces runtime.
+
+If config contained:
+
+Employees
+Absences
+Jobs
+Departments
+Positions
+Managers
+
+
+ADF could execute several requests concurrently.
+
+Step 5: Incremental Fetch Logic
+
+The dataset receives:
+
+{
+  "relativeURL": "@item().url",
+  "filterBy": "@item().filter",
+  "daysPrevious": "@item().days"
+}
+
+
+This strongly suggests the REST dataset dynamically builds the URL.
+
+Possibly:
+
+Employees?$filter=LastModifiedDate ge '2026-11-07'
+
+
+or
+
+Employees?modifiedSince=2026-11-07
+
+
+using:
+
+daysPrevious
+
+
+for incremental loads.
+
+Hence the pipeline name:
+
+Fetch Data Incrementally
+
+Step 6: Data Extraction
+Copy Activity
+
+Authorization header:
+
+@concat('Bearer ', activity('Login').output.access_token)
+
+
+Creates:
+
+Authorization: Bearer eyJ...
+
+
+for every API call.
+
+Source:
+
+"type": "RestSource"
+
+
+Sink:
+
+"type": "JsonSink"
+
+
+So the flow is:
+
+Cezanne API
+        ↓
+ADF Copy Activity
+        ↓
+JSON Files
+        ↓
+Azure Blob Storage
+
+Pagination Handling
+
+Interesting section:
+
+"paginationRules": {
+    "supportRFC5988": "true"
+}
+
+
+This means ADF automatically follows pagination links provided in HTTP headers.
+
+For example:
+
+Link:
+<page=2>; rel="next"
+
+
+ADF keeps requesting pages until complete.
+
+Very useful if:
+
+Employees = 50,000
+Absences = 100,000
+
+
+and Cezanne limits pages to 500 rows.
+
+Architecture Assessment
+
+If I were reviewing this implementation, I would score it quite highly because it includes:
+
+✅ Managed Identity
+
+✅ Azure Key Vault
+
+✅ OAuth authentication
+
+✅ Metadata-driven endpoint catalogue
+
+✅ Parallel execution
+
+✅ Incremental loading
+
+✅ Automatic pagination
+
+✅ Dynamic filenames
+
+✅ Reusable datasets
+
+✅ Separation of configuration from orchestration
+
+What I'd Improve
+1. Watermark Table Instead of "daysPrevious"
+
+Currently it looks like:
+
+"days": 1
+
+
+which implies:
+
+Load last 1 day
+
+
+Risk:
+
+pipeline failure
+delayed execution
+data gaps
+
+A better enterprise pattern is:
+
+LAST_SUCCESSFUL_LOAD_TIMESTAMP
+
+
+stored in:
+
+Azure SQL
+Snowflake Control Table
+Metadata database
+
+Then query:
+
+ModifiedDate >
+LastSuccessfulLoad
+
+
+This guarantees no data loss.
+
+2. Land as Parquet
+
+Currently:
+
+JsonSink
+
+
+I'd probably do:
+
+Raw JSON
+      ↓
+Parquet
+      ↓
+Snowflake
+
+
+because Parquet significantly reduces storage and ingestion costs.
+
+3. Capture Audit Statistics
+
+Store:
+
+Pipeline Name
+Endpoint
+Rows Loaded
+Start Time
+End Time
+Status
+
+
+for operational monitoring.
+
+Interview-Level Summary
+
+If asked what this pipeline does, I'd say:
+
+This pipeline performs incremental extraction from the Cezanne HR API. It securely retrieves OAuth credentials from Azure Key Vault using Managed Identity, authenticates to obtain a bearer token, reads a metadata configuration file that defines source endpoints, then executes parallel REST API extractions using a ForEach loop. Pagination is handled automatically through RFC5988 support, and data is landed as JSON files in Azure Blob Storage. The design is metadata-driven, scalable, secure, and avoids hardcoding endpoint logic within the pipeline itself.
+
+That's exactly the kind of explanation that would impress a client or architecture panel because it focuses on the design patterns, not just the individual ADF activities.
+
+
+---------------------------------------------------------
+
+{
+    "name": "Fetch Data Incrementally",
+    "properties": {
+        "activities": [
+            {
+                "name": "Login",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "Store API Key as Auth Header",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "method": "POST",
+                    "headers": {
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Authorization": {
+                            "value": "@variables('auth_header')",
+                            "type": "Expression"
+                        }
+                    },
+                    "url": "https://w3.cezanneondemand.com/CezanneOnDemand/OAuth/Token",
+                    "body": "scope=http://www.cezannehr.com/auth-scope/APIRead&grant_type=client_credentials"
+                }
+            },
+            {
+                "name": "Fetch Config",
+                "type": "Lookup",
+                "dependsOn": [
+                    {
+                        "activity": "Login",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "JsonSource",
+                        "storeSettings": {
+                            "type": "AzureBlobStorageReadSettings",
+                            "recursive": true,
+                            "enablePartitionDiscovery": false
+                        },
+                        "formatSettings": {
+                            "type": "JsonReadSettings"
+                        }
+                    },
+                    "dataset": {
+                        "referenceName": "DS_AzureBlobStorage_JSON",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "filename": "pipeline-config.json"
+                        }
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "Loop to Fetch",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "Fetch Config",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('Fetch Config').output.value",
+                        "type": "Expression"
+                    },
+                    "isSequential": false,
+                    "batchCount": 10,
+                    "activities": [
+                        {
+                            "name": "Copy From Source",
+                            "type": "Copy",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.12:00:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": true,
+                                "secureInput": true
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "source": {
+                                    "type": "RestSource",
+                                    "httpRequestTimeout": "00:05:00",
+                                    "requestInterval": "00.00:00:00.010",
+                                    "requestMethod": "GET",
+                                    "additionalHeaders": {
+                                        "Authorization": {
+                                            "value": "@concat('Bearer ', activity('Login').output.access_token)",
+                                            "type": "Expression"
+                                        }
+                                    },
+                                    "paginationRules": {
+                                        "supportRFC5988": "true"
+                                    }
+                                },
+                                "sink": {
+                                    "type": "JsonSink",
+                                    "storeSettings": {
+                                        "type": "AzureBlobStorageWriteSettings"
+                                    },
+                                    "formatSettings": {
+                                        "type": "JsonWriteSettings"
+                                    }
+                                },
+                                "enableStaging": false
+                            },
+                            "inputs": [
+                                {
+                                    "referenceName": "DS_Cezanne",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "relativeURL": {
+                                            "value": "@item().url",
+                                            "type": "Expression"
+                                        },
+                                        "filterBy": {
+                                            "value": "@item().filter",
+                                            "type": "Expression"
+                                        },
+                                        "daysPrevious": {
+                                            "value": "@item().days",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ],
+                            "outputs": [
+                                {
+                                    "referenceName": "DS_AzureBlobStorage_JSON",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "filename": {
+                                            "value": "@item().filename",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "Get API Key",
+                "type": "WebActivity",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "method": "GET",
+                    "url": {
+                        "value": "@concat(pipeline().parameters.kvBaseUrl, 'secrets/cezanne-auth-header?api-version=7.3')",
+                        "type": "Expression"
+                    },
+                    "authentication": {
+                        "type": "MSI",
+                        "resource": "https://vault.azure.net"
+                    }
+                }
+            },
+            {
+                "name": "Store API Key as Auth Header",
+                "type": "SetVariable",
+                "dependsOn": [
+                    {
+                        "activity": "Get API Key",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "variableName": "auth_header",
+                    "value": {
+                        "value": "@concat('Basic ', activity('Get API Key').output.value)",
+                        "type": "Expression"
+                    }
+                }
+            }
+        ],
+        "parameters": {
+            "kvBaseUrl": {
+                "type": "string",
+                "defaultValue": "https://kv-nas-dev-ae82.vault.azure.net/"
+            }
+        },
+        "variables": {
+            "serviceurl": {
+                "type": "String"
+            },
+            "auth_header": {
+                "type": "String"
+            }
+        },
+        "folder": {
+            "name": "NAS_MDM"
+        },
+        "annotations": [],
+        "lastPublishTime": "2026-10-27T09:59:10Z"
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}

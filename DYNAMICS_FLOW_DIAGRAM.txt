@@ -1,0 +1,78 @@
+DYNAMICS FLOW - CONTINUES FROM CURRENT_STATE_DIAGRAM.txt (after the SNOWFLAKE BOUNDARY)
+=========================================================================================
+
+Tags:  [E] evidenced in the exports   [V] verified by queries   [T] stated in talks
+       [I] inferred                   [?] unknown
+
+   ===================================|=====  SNOWFLAKE BOUNDARY  ==================================
+                                      v
+  ADF PUSH  (BLACK BOX, owner unconfirmed)
+  -----------------------------------------------------------------------------------------------
+   1. Reads VW_D365_REQUESTS                         [I]  method + URL + body, max 2000 per entity
+   2. Authenticates to Dynamics (app registration /
+      service principal)                             [?]  who owns it: NAS or Dynamics partner
+   3. Calls the API, one request per record          [I]  POST = create, PATCH = update
+      - paging, throttling, retries                  [?]  not seen
+      - failed rows are retried next run             [E]  view picks up "new / retry / changed"
+                                      |
+                                      v
+  DYNAMICS 365 (core CRM)                            [T]  not live, partner builds the data model
+  -----------------------------------------------------------------------------------------------
+   Landing zone the partner exposed                  [T]  "landing zone made available to us"
+        |
+        v
+   Dynamics tables: Contact, Account, then the other objects   <-- THE GAP: only Contact and
+   (gifts, memberships, events, tax have no payload)                Account payloads exist
+        |
+        v
+   Dynamics assigns its own GUID (contactid / accountid) to each new record
+                                      |
+                                      v
+  RETURN PATH: DYNAMICS --> SNOWFLAKE
+  -----------------------------------------------------------------------------------------------
+   A. Write-back of the new Dynamics ID               [E]  D365_WRITEBACK pipeline named in SPEC_2
+        ADF captures the response ID
+        --> SP_XREF_CAPTURE*                          [?]  bodies empty in exports, deployment unknown
+        --> XREF links  GOLDEN_RECORD_ID <-> Dynamics ID
+        --> AUDIT_DB.MONITORING.D365_WRITEBACK_STATE  [E]  tracks sent / failed / retry
+        (without this, every run re-sends and creates duplicates)
+
+   B. Scheduled pull of Dynamics tables               [E]  504 REST rows, target schema DYNAMICS
+        ADF REST / Dataverse, driven by PIPELINE_METADATA
+        --> RAW.DYNAMICS.STG_*   (truncate after merge, like RE)   [I]
+        --> RAW.DYNAMICS.ODS_*   (ODS_CONTACTS, ODS_ACCOUNTS, ODS_MSNFP_APPEALS ...)  [V] reconciliation seen
+        --> PIPELINE_WATERMARK records each run
+
+   C. Reconciliation                                  [V]  DYNAMICS_API / D365_API snapshots
+        counts in Snowflake vs counts in Dynamics
+
+   D. Feed back into MDM                              [E]  SP_ETL_DYNAMICS reads ODS_CONTACTS/ACCOUNTS
+        --> STANDARDISED_RECORDS (D365-<id>, D365C-<id>)       but it is OFF (org-name matching issue)
+        --> match groups --> golden records, so Dynamics becomes a live source after RE retires
+
+  Other exits (same boundary):
+   Golden records --> HubSpot                         [T]  mechanism [?]
+   VW_RE_* --> RE_REQUESTS --> ADF --> Blackbaud API  [E]  RE write-back, ends at RE retirement
+
+
+READING THE FLOW END TO END
+---------------------------
+1. Snowflake builds the request (VW_D365_REQUESTS).
+2. ADF sends it to Dynamics.
+3. Dynamics creates the record and a GUID.
+4. The GUID comes back and is stored in XREF and D365_WRITEBACK_STATE.
+5. The scheduled pull copies Dynamics into RAW.DYNAMICS.ODS_*.
+6. Reconciliation compares the two sides.
+7. MDM can later read the Dynamics data as a live source.
+
+WHERE THE ITEM 2 GAPS SIT
+-------------------------
+- Step 2 and the unseen ADF pipelines (owner and existence unknown).
+- Payloads for objects other than Contact and Account.
+- Step A: empty SP_XREF_CAPTURE*, plus the 11 XREF mismatches.
+- Step D: switched off.
+
+TO CONFIRM WITH ALEXANDER
+-------------------------
+- Whether steps A and B are the same pipeline or separate ones.
+- Whether the pull (B) covers the objects that are pushed.

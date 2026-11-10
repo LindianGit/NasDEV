@@ -1,0 +1,51 @@
+RELATION_DESCRIPTION,RECIP_RELATION_DESCRIPTION,ROWS_N
+Employer,Employee,119876
+,,100081
+Supported By,Supporter,56853
+Supporter,Supported By,55056
+Employee,Employer,30391
+,Supporter,19401
+Child,Parent,8674
+Spouse,Spouse,8235
+Trustee,,3810
+Friend,Friend,2862
+Husband,Wife,2046
+Wife,Husband,1892
+Child,,1242
+Trustee,Trust,1157
+Client,Client,1121
+Unknown Relationship,Unknown Relationship,1116
+Relative,Relative,774
+Son,Mother,747
+Daughter,Mother,723
+Mother,Daughter,692
+Employee,,598
+Mother,Son,572
+Branch,,549
+Client,Client Of,531
+Client Of,Client,524
+Contact,Contact,418
+Partner,Partner,416
+Beneficiary,Volunteer,405
+Volunteer,Beneficiary,405
+Friend,,397
+Beneficiary Contact,Dependent child,361
+Ex-Branch Treasurer,Branch,333
+Branch,Ex-Branch Treasurer,322
+Dependent child,Beneficiary Contact,315
+Son,Father,309
+Daughter,Father,298
+Ex-Branch Officer,Branch,296
+Father,Daughter,293
+Father,Son,278
+Branch,Ex-Branch Officer,268
+Ex Employee,Ex-Employer,266
+Ex-Employer,Ex Employee,254
+,Friend,249
+Colleague,Colleague,243
+Son,,225
+,Trustee,208
+Contact,,202
+Family,Family,198
+Son,Parent,183
+Employs,Employee,169

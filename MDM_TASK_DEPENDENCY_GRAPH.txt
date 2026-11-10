@@ -1,0 +1,20 @@
+MDM TASK DEPENDENCY GRAPH
+
+Daily schedule: 06:00 UTC
+
+TK_STANDARDISE_RECORDS
+          |
+          | runs after standardisation completes
+          v
+TK_BUILD_MATCH_GROUPS
+          |
+          | runs after match groups are built
+          v
+TK_GENERATE_GOLDEN_RECORDS
+
+Execution order:
+1. MDM_DB.STAGING.TK_STANDARDISE_RECORDS
+2. MDM_DB.STAGING.TK_BUILD_MATCH_GROUPS
+3. MDM_DB.STAGING.TK_GENERATE_GOLDEN_RECORDS
+
+The downstream tasks are dependency-triggered by the preceding task.

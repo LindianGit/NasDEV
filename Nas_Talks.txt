@@ -1,0 +1,992 @@
+Yeah, yeah, yeah, yeah, yeah. Okay, good. I think you're nice and quietly spoken, but I think I can know. 
+
+Let me, one second. We're just waiting for another chat from Ben White, who's due to tune in at any moment. We will be able to let him in while Hannah needs to.
+
+One second. I'll just message Hannah. So, Lindian, thanks for getting in touch with us.
+
+Sit your notes. Am I right in thinking? To Hannah, we've got Ben White who should be joining any minute. Is that the Arsenal player? Ben White? Sorry? No, sorry.
+
+It's a joke. It was, there's an Arsenal player called Ben White. If you follow football.
+
+No, of course there is, of course there is. Lindian, can you run, do you have a different microphone? It is very, you are very quiet. It's not just you being old.
+
+I'm gonna have to speak louder, I think. So, okay. Yeah, I do apologise.
+
+I've got a very old laptop. So, I've had some technical issues with it. So I just have to speak louder.
+
+Yeah, yeah, yeah. No, I think it's just obviously not having necessarily a headset or the like is part of the problem. Okay.
+
+One second. Let me just see. Are you an Arsenal fan then? No, I'm from Birmingham, actually.
+
+I live just outside London, but I'm actually from Birmingham. So, I'm a Villa fan. All right.
+
+Okay, okay. I played football with a Villa fan. He was very happy this weekend, of course.
+
+Yeah. Luke, great. We've got Ben on the call now as well.
+
+So, Lindian, really, really nice to meet you. And thanks, as I say, for short notes coming on board. Basically, the reason for content, well, number one, we'll just go around the table very briefly.
+
+I'm the assistant director of IT here at the National Authority Society. Alex? I'm Alex. I'm the head of data AI and development here at the NAS.
+
+Okay, nice. Hi, I'm Ben. I'm the transformation manager at the NAS.
+
+Okay, nice to meet you all. So, Lindian, probably without boring you with too much background, we are a charity. We are going through a transformation at the moment where we've changed out a number of major systems already.
+
+But we have a major project around CRM where we are moving from Razors Edge, which is a kind of a historic charity orientated platform, to Dynamics, which is one that's very common in charity. But we're in that process at the moment. We're slightly untraditional in that we're pairing it with HubSpot, which is a commercial marketing tool, as you may or may not be aware.
+
+And to bring those two systems together, we have, effectively on Alex's advice when he joined around a year ago, put in place a Snowflake instance and engaged a partner to effectively do the work of managing the migration of our fundraising data from the Razors Edge platform into Snowflake and then onwards to HubSpot for marketing purposes and then into Dynamics as the core CRM, ultimately for CRM purposes and then for Snowflake to be the integration tool between those two going forward. Okay. We have done a chunk of work in that space.
+
+We've been engaged for a number of months with the partner on a fixed deliverables basis. We are now, to be honest with you, having discussions with that aforementioned partner around the final stage of this work, which is to effectively deliver the migration of the data from Razors Edge into Dynamics. Now, we have done the data mapping in terms of the fields and how they need to match between the two platforms, but the engineering work to complete that is the bit that the partner have come back with a very large quote beyond the fixed deliverables piece to complete that work.
+
+And what we're wishing to do is to get an understanding from an independent perspective of what is perceived as being the work to be complete. So you as a Snowflake expert have been obviously engaged by Hannah and we're excited about you spending a couple of days to give your expertise. So what we need to do now really in the short time is to understand what you need feeding into those two days and we can talk a little about what we think you might need and kind of lining that up for you.
+
+One quick question. Do you have any experience of Dynamics in your? No, I don't have experience on Dynamics. I'm not sure if you have my CV.
+
+Yes, I do. To be honest, it didn't profess to this, but I thought I'd ask anyway. But I'm assuming that Dynamics is a relational database or at least a database.
+
+Exactly. Yeah, it's Microsoft Dynamics. So the Microsoft effectively CRM or Microsoft Dynamics is the overlay for their ERP platform.
+
+But this is the CRM component. So as you rightly say, it's a relational database and a solution that you know, we'll be wanting to integrate with. Okay.
+
+So in many regards Alex, I don't know. I guess I've considered a discussion with Emma Hunt who are the Dynamics partner might be helpful. And I guess seeing some of the documentation that's gone on to date.
+
+I don't know if you have any thoughts about what you would share with Lindia. Yeah, probably the document review initially. In terms of the migration and the activity we want to look at from Snowflake.
+
+I don't know how much Emma Hunt could feed into that because really we're pushing data to a landing zone that they have made available to us. So there's not much of the actual internal Dynamics piece that we need to focus on for this. Yeah, so essentially there's an API that we're using to pull data out into Snowflake.
+
+We're using an MDM piece in the middle just to sort of de-juke and enrich the data and we're just trying to align data between Dynamics, HubSpot and a legacy CRM as well, which will be a by the point we go live it will be a static data set which we are looking to build that into one consolidated view. I think is the approach at the moment. Okay.
+
+So what I probably suggest is the documentation would be a good starting point for you. Yeah, probably access to Snowflake so you can look at some of the stored props, look at some of the pipelines that we've got running, the pipelines running in ADF. There's also, I mean it depends on what we're looking at.
+
+Are we focused on the MDM and the data migration or do you want the integrations included probably as a nice to have at the end? As much as possible, as much as possible. I mean if I got the documentation today, I'd probably start reading this afternoon. So, okay.
+
+I mean the integration to the charity stuff, if that's what you mean, the donations is not part of this really because we're not having that discussion. And I would argue it's predominantly around the Dynamics piece to which we're having the primary discussion. The MDM I'm hoping we can close out with the existing partner as bare minimum and then Linden's investigation around the Dynamics piece is the key.
+
+Okay, so in terms of Dynamics then I can share with you all the mapping documentation that's already been done. So we've done the mapping work to understand what the existing Razor's Edge data which is legacy CRM, how that maps into the Dynamics framework so we can, into the schemes that I think there's, it's 2,000 tables within that mapping document that you'll be seeing how things are grouped into, I think it's 36 objects as well that we're looking out for that. So yeah, we'll, I'll share that with you.
+
+It would be important to say what's been done on that already is it? I2 been done or is that? So those two were done as part of the HubSpot migration. So the core data set which is the Razor's Edge data is being migrated into both the HubSpot instance or was migrated into HubSpot and is being kept concurrent with Snowflake and then passed back by the CTL into Razor's Edge. The main two objects from that which were the custom, so the donor data and donation, I think it's, and I think it's the event module have also, have already been moved into that.
+
+They go through the MDM to dedupe and to match records from Razor's Edge where they were not the same level of unique fields to keep things separate. So we're mapping unique fields across those. I'm sure Lyndian's probably, probably, you know, it'd be ideal for a diagram, isn't it? Or whatever you've already got to demonstrate these three platforms.
+
+And again, just to reiterate Lyndian, Razor's Edge is the historic platform. Then we've got Razor's Edge in between HubSpot and then Dynamics and it's this final stage of moving the data up to Dynamics. Sorry, Alex, I didn't want to cut you off in your prime, but equally I'm aware that Lyndian's only just been made aware of the... That's all right, I'm surprised and grateful that you're still thinking of my prime.
+
+But yeah, we'll, yeah, we'll get that documentation and we'll share that. But yeah, so essentially the Razor's Edge data is the core data set, but it will feed both platforms out. It's just it's a much broader data set that gets fed into Dynamics because it's all of the donor information.
+
+Okay, would I need a document stating what was promised? And what do you think is not, hasn't been delivered? Or is it just a case of just making sure of getting the mapping from essentially from Snowflake into Dynamics via Razor and HubSpot? I think, yeah, it might be that you and Alex need to chat once you've read it again, but I think the truth is what's not been delivered is almost the work to be done. It's just really that the partner at this point has suggested there's substantially more work than they'd anticipated. So that's where we're wishing for you to review it to give us an objective view to some extent of that work to be done.
+
+Okay. And who knows where that then leads with the partner with one view and we will get your independent view and you know, I think that yeah, that'll be something to see. So I guess Alex, sorry, paperwork or documentation and I guess to some extent an email probably reiterating what we've just said and ideally anything visually that then supports the way the systems work together.
+
+I think would be great. Yes. So the way the systems work together from Dynamics integration obviously that documentation doesn't yet exist because that was being developed as part of this.
+
+The MDM documentation exists and I think there's the high level for it. But yeah, I'll put some it together. I think it's really at the top level I'm saying in terms of how, you know, I think.
+
+I didn't copy the deliverables at the SAW so there's an indication of what was going to be delivered on behalf of HubSpot. Well, it's yeah, I'm sorry. I was leaning on the visualisation of how these three platforms and that's where it might be that you have a chat with Lindian when he's had a good read as well and to get that understanding because it is a bit of an interesting one in that we've staged it.
+
+It's cut dates coming from Razor's Edge into Snowflake onto HubSpot. We've done that as the first stage. And then like I say Dynamics comes in as another spear and then RE is closed down ultimately to leave the two basically keeping in sync with each other.
+
+Okay, cool. Well, I can start on that this afternoon. In terms of timing, when do you want me to complete my stuff, my site? I think we wanted you to do a couple of days work this week.
+
+So I think if you can aspire to have that completed with us, it would be ideal by, you know, yeah, there's the evening but maybe the end of the week would be fine. I'm actually not around until Monday next week. So I think if that gives you the flexibility and the engagement with Alex to hopefully give a view of what we're looking for in clear terms is your estimate in terms of number of days to complete the Dynamics piece of work.
+
+And I guess Alex within the context of everything you provided providing if you could give that clear view on what that work is because obviously the mapping has been done and we've done the HubSpot piece and the MDM. I think we make an assumption that's done and be very clear on just that piece. I think that's important.
+
+So then Lindy can give a view and like I say, Lindy, there is a question mark about working with a partner to get an agreement to get that work done and therefore there's kind of a potential piece of work post that that either another partner or a consultant might be someone that we look at to get done. Okay, okay. But for the moment, it's a negotiation point in terms of getting an independent view.
+
+Okay, I'll look at it. Okay, so I'll send over the documentation and if there's any questions, feel free to reach out directly by email. I'll copy Ben as well if there's any questions from the kind of adopting side as well.
+
+And I'm assuming you do have my email address. No, we don't actually. Oh, sorry.
+
+If you, is it on there now? I'm assuming it is. Probably expecting it to be, but it looks like it's control. Yeah, if you could stick your email in the chat or just give it to Hans Passover.
+
+I think that might be easy. I'll just put it in the chat now. Yeah, chat will be best.
+
+That'll be good. Ben? Yeah, no, just from my point of view, we've covered everything that you guys need technically. If there's any way of understanding the sort of sequencing of what would need to be done and get a rough sense of timescale, because I'm obviously interested in how this work kind of potentially would block and further adoption work until it's completed and sort of the length of time it would take. 
+
+So it's much more important to get that sort of technical stuff done and done to the right standard. But if there's a way that you could just kind of incorporate those in the dictation of the sequencing and sort of timescales, that would also be really helpful. Yeah, so I guess, Lyndian, if it's 20 or 25 days work or however many, whether that would need to be done by one individual and work in series or it could be done in parallel would be good to understand, I guess, to play into Ben's question.
+
+Okay. Okay, first things first, I'll look at it and I'll try and get back to you by Thursday afternoon, because this week I've got a couple of appointments and I'll try and get back to you and stumps up Thursday afternoon. Is that okay? I mean, that would be great.
+
+And I guess these guys, what we'll do is share with you our email address. Email address is so you can forward that on to these guys as well as me, even if I'm not back and then I'll pick up Monday with them. So, that would be good.
+
+And I guess to some extent, you know, I don't know how you would choose to present it to us, but it is an estimate of working time to complete this piece of work is what we're looking for. And like I said, that view on whether it can be done in parallel is part of that, but that would be great. To be clear, I guess, Alex, am I right in thinking, you know, probably talking about the specifics, there's a perception you'd mentioned 2,000 tables in the dynamics environment.
+
+There's a perception that, well, it's probably an important thing to mention, perception that the work to be done, given that we have the mapping already, is a piece of work which is not incredibly complex, but there is quite a lot to be done and it's probably fair to say that the existing partner had mentioned using COCO to speed the process COCO within Snowflake. Cortex and so on. I don't have experience of that.
+
+I see. I see. Okay.
+
+Well, I think if you give us, if you give us the view on on the kind of the human first approach that and then we go from there. Yeah. Okay.
+
+And yeah, if COCO is needed or can be used, it would be a good opportunity for me to get my head down and learn it and see if I can implement it. So that would be a fantastic opportunity if required. Yeah.
+
+I mean, obviously from our perspective, I think it's something that, yeah, if you could get an understanding of where things might be able to be fast-tracked with the use of COCO, because I think that would be really beneficial, although I acknowledge what you're saying is you don't have experience and aren't an expert at this moment in time. I guess Alex, in terms of providing an aspect of guidance in that regard, you know, I don't, I don't know where if you know the perceived efficiencies could be gained from COCO, because I do know it's just obviously an AI tool that's kind of speeding effectively the code creation in that regard or process. Yeah, yeah.
+
+Well, you picked a model, can't you bring the model to it? So I've been, I've been experimenting with using GPT 6.1 to basically use it to build out the script, either Python or SQL, depending on whether it's best suited for building out the migration payloads. I've been using it just for analytics and data interrogation, but that's what I want to use it for, is building out a payload using the mapping documentation, which you can technically, you can add as a supportive piece of data into the process. I don't know if, yeah, I don't know if you and Lindy and it might be helpful having another half hour between yourselves in terms of maybe talking about the more specifics to make sure that we get the best out of it as possible.
+
+Obviously, Lindy's got a huge expertise in Snowflake in general and I think you having a bit of look at that already and also what you know about what work there is to be done, I think that might be, that might be valuable. I mean, yeah, and it might be valuable post you having had an initial look at Lindy and then having established some questions that you've got and the like, so I don't know if that's tomorrow or morning or whatever. It feels like it might be in that order type thing.
+
+Yeah, I'm just putting the email together now in the background. I've got your email address here. So just, I'd say read the documentation and then let me know what, you know, when suits you.
+
+Yeah, and I'll try and give you my IP address. So I'm sure you've got a network policy set up on Snowflake. So, I've got your, I've got Gmail set up, if you need to set yourself up on Snowflake, it'd be, you'd have to get yourself up on Android.
+
+Yeah, but I'm saying that in order to get onto your system unless you've got, do you have network policies or not? That's a question about an hour, but yes, I do. Well, yeah. Well, if you've got network policies, I need to give you my IP address as well.
+
+So I'll send that over anyway. Yeah. That would be really helpful, Lyndian, and I guess Alex, that's great if you can kind of support that.
+
+Okay. Sorry, Ben, but yeah, sorry, Lyndian, go on. No, I'm just waiting for the documentation.
+
+Yeah, cool, cool. Look, lovely to meet you, Lyndian. We're excited about what you can bring and your independent view.
+
+Yeah, I'm just really keen. We've made the most of it by you being 100% clear and us not necessarily getting any confusion about where that scope lies and what we wish to get out from Thursday afternoon. But I think Alex is probably the one who can provide that in the best detail, whilst Ben and I are kind of more interested in getting this work done from a kind of project delivery perspective on the transformation side to which we're launching dynamics early in, well, in the first quarter, straight ahead for next year.
+
+So we're coming to the, with the projects coming to the boil and this is quite an important block that we're trying to navigate. So that'd be great. Okay.
+
+Okay. Brilliant. Brilliant.
+
+Thank you. Cheers, guys. So I'll catch you later.
+
+Thank you. Cheers. Bye.
+
+Bye. Bye.
+
+This is the second Talk 
+
+When did this project start? It's been running for around a year at the moment. When I came in, the original plan was to just use the out-of-the-box integration between Dynamics and PubSpot. Because the out-of-the-box integration wasn't good enough between Dynamics and PubSpot, I suggested using Snowflake as a data layer, like an orchestration layer between these, and also to manage the migration between Razor's Edge, Dynamics and PubSpot.
+
+So in your architecture document, I think you're quite correct to start with. So you're saying your legacy CRM is Razor's Edge into an ADF ingestion pipeline into Snowflake. We've got an MDM layer in there currently that works for PubSpot and passes into PubSpot, but there is no connection, and obviously it's the same data source, but there's a huge additional number of tables that cover the Dynamics dataset, which you need to build into that MDM layer.
+
+So then we've got data stage and transition, yeah, that's correct, into PubSpot and Dynamics API, and then the reverse input stage processing layer, the super processing layer. Okay, yeah. So, yes, I think your architecture is more or less correct.
+
+So I'm just looking at your basic instruction, Razor's Edge, yeah, is primary Azure pipelines, yeah. Yeah, okay. Yeah, so it is the golden layer, and it will orchestrate data.
+
+Eventually, when we decommission Razor's Edge, it will make sure PubSpot and Dynamics remain in alignment. Okay. Cool.
+
+Okay, I've just seen the document come through, the SOW comes through. Yeah. I'll have a read of that one.
+
+And then once I get the access to Snowflake, then I can start, if you can drop down to 0.11 summary of what to do. Yeah. Okay, cool.
+
+Just reading this summary to make sure we're right on here. Yeah, yeah. So basically, I've written off the architect.
+
+These are just bullet points for me to tick off. If you want to add any more, then you're more than welcome. So far, we've got one ticked off.
+
+You've given me the architecture diagram, flow diagram. That's SOW I haven't put on here, but it's already there. You've already sent me that.
+
+That's cool. And then once that's done, I can start answering some of these questions with the aim of trying to give you some sort of estimate by end of play on Thursday. I mean, some of them are a bit over the top, like unclear business rules.
+
+Yeah, but I mean, we've only got a limited time, so I'm going to try and do as much of this as I can. Yeah, yeah, of course. Right, so I'm saying.
+
+Oh, yeah, I've got a number of processes that can practise using the sample. And that's the email account provided with the machine. But I'm sure you can't get that to you in time.
+
+Right. I'll work with Luke to get that access. So are there any questions? So really, you need that access as the next stage is that you've got the SOW there looking at your your details and what you are looking to achieve.
+
+That looks right to me. So, have you got any questions regarding the existing architecture setup or anything like that? No, no, but once I start looking at the code and stuff, probably some more questions will come in, because basically this document is based on what we discussed yesterday, and then you sent me the actual architectural documents, so I've kind of like changed it a bit. So, the way it stands now is what my understanding of what was discussed yesterday and the current architecture, and also, basically, this document is just trying to get my head into the project.
+
+So, it's like that, so you can have a read of it, but I think, like I said, the most important part is just read the summary part, part 11, the architecture, and maybe sections one and two, as well, just to see what we're doing on this, so I'll send you. Yeah, absolutely, right. I'm going to try and get you accesses.
+
+Now, we have set you up, so you should be able to message me directly on Teams, because we've set you up as a guest. Okay. I did try and call you a moment ago, though, but it went straight to voicemail, so let me just see if I can get a message to you.
+
+Yeah. It says you're not logged in, so you're on, yes. Right, so I've just sent a message.
+
+It's not showing any status for you. I suppose, you probably don't sign into Teams via your, I mean, it looks to be via your Gmail account, yeah, because you've accessed it via this email, haven't you? I've accessed Teams from my Gmail. Right, well, I've just sent you a message to your Gmail via Teams.
+
+Is it going to come through on your chat store? No, there's still nothing in my chat. No, okay. Right, what I'll do is I'm going to get you the access there, and I'll see what I can do to get you that access as soon as possible, but I'll drop off this call to go and do that, all right? Yeah, and are you open for calls in the meantime? You're on your mobile? Yeah, absolutely.
+
+Can you just give it to me now, the number? Yeah, 07718. Yeah. 597.
+
+Yeah. 927. Okay.
+
+Okay, cool. Yeah, I've not got too many calls in the diary yet today, but yeah, so let me see what I can do in terms of getting you this access as soon as possible, all right? Okay, cool, cool, and then we can take it from there. Perfect.
+
+Thanks, Andy. I love your comments. Okay.
+
+Cheers. Cheers, man. This it?
+
+---------------------------------The following Talk is below
+
+Talk3
+
+been proposed. First of all, apologies for earlier this week, I think there's some confusion between Luke and I as to what exactly the ask was, it got dropped on me pretty last minute as I said, but I appreciate you persevering with that and sorting that. The question around the ETL, the reverse ETL from Snowflake into Razor's Edge, now you asked the question, is it end of life? Yes, it is end of life, but they are not planning to migrate away from it until May next year.
+
+Because they want to make sure they get London Marathon and some other activity out of the way before the operational teams move over. So the reverse ETL was designed so that the three platforms are kept in alignment to make sure that if some users are still using Razor's Edge, the data is still flowing effectively. The alternative is that the cutover is delayed until May, but we likely won't have your support by then. 
+
+So we needed to look at the options as to what works best. So I'm open to your opinion on that. Yeah.
+
+Yeah, I'd have to think about that one. So your question is, is that should we keep it as? Well, no, I suppose the question is, do we have the option for you to do the work that we're requesting of you and then almost stand it down or pause it until the cutover, which can happen at a later date? Or do we complete the reverse ETL into Razor's Edge, in which case it's just a matter of standing down Razor's Edge then at a later date? I think maybe it's just probably easier for both ways, just to keep Razor's Edge up as long as possible and then have the cutover just when you need it. So I could do the ETL into Razor's Edge now or attempt to, and then we can have that.
+
+So that was the nature of the request, and I probably didn't explain that fully to start with, so apologies. It's quite a complex situation where the operational teams are, you know, they've been using Razor's Edge for so long that the migration is going to be quite difficult, and they've got low confidence in dynamics, so they want to do some of these major activities in Razor's Edge. But if we want to migrate teams one at a time or something like that, we need to be able to keep all three platforms in alignment. 
+
+So if you think that Razor's Edge ETL is achievable, I can give you the Swagger documentation for Razor's Edge. It's got quite a decent API for pushing data into it. So at the moment, based on your quote, what I'm proposing to Luke, just to be transparent, is that we contract you on a sort of CAT TNM basis with those deliverables in place. 
+
+So we're saying we'll pay you day rate, you know, to complete this activity. We probably, I think we're aiming at about 40 days, 45 days, something like that. Do you think that's sufficient for you to complete the work? I think so. 
+
+I think the initial specs, they had covered that, I think, the actual numbers. So I believe so, but I suppose by going a sort of CAT TNM day rate, we'll keep you focused on those deliverables and the work that you're committed to do. But if we do need to potentially flex some of your time in and around particular deliverables, we've got the ability to do that.
+
+Yeah. In terms of what should be migrated at the moment, it's just contacts and accounts here. But you've mentioned, I remember in the first meeting, you mentioned several other entities, like 36 entities in total. 
+
+Are those things like gifts, membership, are those included in the 36 you mentioned? Yes, they are. And they will need to be as part of a reverse ETL. So I don't think the full 36 needs to be part of a reverse ETL. 
+
+But there are a lot of entities, but they should already all have been mapped. So they should all be in the mapping documentation that you've got. Yeah. 
+
+And there's two mapping documentations. You gave me one and then I think, was it Mr Gibbs, Mark Gibbs? Mr Gibbs, yeah. Yeah. 
+
+He gave me another one. I should be looking at the Mark Gibbs one. He's the project manager. 
+
+So if they've created a newer one, then I'm happy for his to be passed as the most recent. Oh, yeah. Because I had a look at that recently, a few days ago. 
+
+I couldn't really make a lot of sense out of it. Whereas the first one I could, I could actually move from point to point from razor's edge into snowflake. So I thought I was passing you the latest one. 
+
+But right. So what we'll do is, I mean, you've done the estimated work that we've asked you for. What we'll do in terms of moving forward, hopefully from Monday, I'll get that worked out with Luke today, as long as you're still amenable to do that. 
+
+We'll get you brought in and as part of the project team. So I'll make sure that you've got support, you've got access to people, we can be answering questions for you immediately. We can get you access to the incumbent who built the existing MDM solution that is in place for HubSpot. 
+
+If you have questions with them and our own operational teams that do Razor's Edge. We'll also get you in touch with M Hans, who are the third party who are setting up the dynamics environment. So you can have any questions answered as soon as possible. 
+
+Okay. Okay. And yeah, dynamics, I get access to dynamics.
+
+What else do I need? Because I made a specific request for dynamics data. I think that's about, oh yeah. Who can I ask for Azure Data Factory questions? Lucy would be the one for that. 
+
+So Lucy has access to the pipelines there. And our subscription, she can add you to that if you need to be able to work with that. Yeah. 
+
+And from your knowledge, there's only one Azure Data Factory pipeline or one Data Factory object? Yes. So Lucy's working on a separate pipeline, which is the integrations pipeline. Now that will be outside of the scope of your work. 
+
+But if you want to talk to her about it for any reason, that's absolutely fine. What that is, is there's an ADF pipeline that will be pulling data from some are given platforms. So like GoFundMe and that. 
+
+It's an API data call that then drops it into a series of tables in Snowflake so that we can do a reconciliation process on that. But that's going to be outside of your remit. But happy for you to talk to Lucy on anything you want informational. 
+
+Oh yeah. Because that pipeline consists of quite a few, sorry, that ADS consists of quite a few pipelines. So I have to look at that as well.
+
+So sorry. So what do you want me to start on first? The reverse ETL or the... I've seen your programme work you suggested. That's fine. 
+
+Just do a revision of that when you think doing the reverse ETL work will best fit into the scope of that. But that reverse ETL will need to just be in place before we go live with the dynamics migration. Okay. 
+
+Then what I'll do is I'll do the flow from Razor's Edge into dynamics for all the objects. Yep. Okay. 
+
+So yeah. Yeah. Because I think from what I remember, I think I put in something like 42 days or something for the... I'll just have a look because I'm just dragging my memory.
+
+It was quite a wide thing. I think you said somewhere between 19 and 42 days. It was quite wide. 
+
+Yeah. That was it because for the objects and the accounts, yeah, that was the minimum. But if it was everything, all the different entities, then I was looking at the upper limits of that. 
+
+But the thing is, once you've put in one, then it just goes faster. So so 40 days, I think 40 days is okay. If it's not, I'll get back to you and just be transparent on this. 
+
+Well, let's do an initial contract for the 40 days, be to progress with it, be transparent with me on progress. And if we need to potentially uplift for an extra five to 10 days towards the end to deliver, we'll do that. Okay. 
+
+Okay. So 40 days is basically two working months just on the... Yes. Okay. 
+
+Yeah. That's fine. Happy with that.
+
+It's a bit of work that takes me up to Christmas time. So I'm happy to actually be on Christmas. Yes. 
+
+Well, yeah. That's great. Yeah. 
+
+That's good. Good. That's good to sign off.
+
+So purposes of this time, you'll report into me directly in terms of the project or any support you need, any help you need, any escalation you need, anything for the project. So I like people to work pretty autonomously. I think I've seen that you were just sort of knuckle down, crack on, but I just need you to let me know the second you need anything. 
+
+And yeah, any support you need as well, any questions you need answered, just come to me or either go direct to the person. But if you're struggling, escalate to me at the earliest point. Yeah. 
+
+Okay. Okay. And is it possible to give me Dynamics access today? Because I can just have a quick look at it. 
+
+I will see what I can do. It's managed by a third party. We're about to go through a process of changing our Dynamics instances to a managed service as well, because we needed to do that for the rest of the development to proceed. 
+
+That's happening Tuesday next week, I think in the test environment. But I'll see if I can get your Dynamics access now. Yeah, because I don't know too much about it. 
+
+I mean, I was doing a little bit of reading about it today. I know it's a financial package. Basically, Snowflake just cleans the data and just gives it there to Dynamics as a clean record. 
+
+And the Dynamics will just write off a journal in a general ledger or something like that, saying this is the donation from X, Y and Z. Well, that's what I imagine. That's going to work slightly differently. That's the integration that Lucy's working on. 
+
+So actually, what happens is we're using Enhance's Dataverse add-on, which is just a big flat table that allows you to insert donation details against a flat table so that it then processes it and puts it in the right table structure and cleans it. So that's the method by which we're going to ingest. Lucy can talk you through that in a lot more detail. 
+
+Okay. Okay. Cool. 
+
+Okay. I'll take it from there So, yeah, if you can get that, those details to me, I can just have a look at Dynamics maybe today, a little bit, or even just maybe spend tomorrow morning on it or something. It is a Saturday tomorrow, so I wouldn't expect you to be working weekends.
+
+No, no, no, no. I mean, no, I've got plenty of time this weekend. I'm not going to spend hours on it, but just a quick comment. 
+
+I'm not supposed to be working now, to be honest. Yeah, that's okay. Well, that's great. 
+
+Okay. Well, I'll get your contract issued as soon as possible. We'll get that sorted in the background anyway. 
+
+And yeah, I'm really pleased that you're joining us. All right. Okay. 
+
+I'm pleased as well. Thank you very much. Cheers. 
+
+Thank you. Speak to you soon. Bye.
+
+Have a nice weekend. Cheers. You too.
+
+Cheers.
+
+
+---- This is the final estimation specification ---
+
+NAS Dynamics 365 Migration: Independent Assessment and Estimate
+
+Client:         		National Autistic Society (NAS)
+Author:         		Lindian, Independent Snowflake Consultant
+Prepared for:   		Alexander (Head of Data, AI and Development)
+                			Ben (Transformation Manager),   Hannah, Zelda, Jade
+Date:           		5 November 2026
+Version:       		 0.2 (Draft)
+Status:        		Draft for review
+Classification: 		Confidential
+
+Version history
+Version 	Date 	Change 	Author 
+0.1 	5 Nov 2026 	Initial draft 	Lindian 
+0.2 	6 Nov 2026 	Added indicative estimate for ETL from Snowflake to Raiser’s Edge. In Executive Summary. For a pilot project an additional 8-15 days is estimated	Lindian 
+
+ 
+Contents
+NAS Dynamics 365 Migration: Independent Assessment and Estimate	1
+Executive Summary	3
+Updates	3
+Panel Discussion: Grand Estimates of Work for Migration and Reverse ETL	3
+Establish the current state of the Snowflake, MDM and ADF implementation.	6
+Catelog Existing Code 30-11-2026	6
+Tasks  in MDM	11
+Dynamic Tables	11
+Current Raisers Edge / Snowflake Processing	12
+Identify the work completed and still required for the Dynamics migration (Estimate)	22
+Work completed (present in code or design)	22
+Work still required	23
+Confirm technical boundary between NAS integration work and Dynamics-side activities.	24
+Hand-off Point	24
+Snowflake To Dynamics Boundary (Diagram)	25
+Provisional Questions	25
+Assess Complexity, Dependencies, Risks and Delivery Sequence.	27
+Complexity	27
+Dependencies	27
+Risks	28
+Delivery sequence	29
+Identify tasks that can run in parallel	30
+Reverse ETL from Dynamics To Snowflake (Estimate for Alexander)	31
+Critical Path	34
+Where AI  Can Help	34
+Notes	35
+
+
+ 
+Executive Summary
+This assessment reviews the current Snowflake, MDM and ADF implementation supporting the migration to Dynamics 365. Existing code and design provide a starting point for Contacts and Accounts: the MDM task chain runs daily, and Dynamics payload views and related processing are present. The outbound connection to Dynamics, cross-reference handling and production readiness still need to be verified.
+For Contacts and Accounts, the estimated core effort is 13–27 person-days, covering mapping review, connection testing, test loads and production cutover. If these tests are positive, the estimate drops dramatically. Conditional work—such as XREF validation, Dynamics-to-Snowflake ingestion and a HubSpot refresh—could add 9–21 person-days. These figures are indicative and depend on confirming scope, environment readiness and which components are already working.
+Additional record types, including gifts, events and memberships, are not included in the Contacts and Accounts estimate and will require separate assessment. The current broader estimate is provisional and should be reconciled against the agreed object list before being used as a delivery commitment.
+The recommended next step is to verify the live Snowflake and ADF configuration, confirm the Dynamics test environment and integration responsibilities, and close the mapping gaps. Then prove one object end to end—including ID capture and reconciliation—before extending the agreed pattern to other entities.
+
+Updates
+06-Nov, 2026 – Request for estimating Reverse ETL from Snowflake to Raisors Edge.
+The figures so far cover:
+Snowflake → Dynamics (Contacts and Accounts): 13–27 days for the core work, or 22–48 including extras.  
+Dynamics → Snowflake ingestion (Contacts and Accounts): about 8–13 days. The other approx 34 objects would add about 22–38 days.
+Writing back to Raiser's Edge via its API is a third integration. Indicatively, a Contacts pilot would be about 8–15 days, with later entities faster.
+
+Panel Discussion: Grand Estimates of Work for Migration and Reverse ETL
+
+Table 1: Work to Migrate into Dynamics
+Work 	In plain words 	Days 
+Check the field mappings 	Make sure every piece of information has a place to go in Dynamics. 	3–8 
+Test the connection to Dynamics 	Check that the data pipe works, and repair it if it doesn’t. 	3–5 
+Ten practice runs 	Move the data ten times in a test environment and check that it arrives correctly. 	5–10 
+Go-live move 	Do the production move and check the results. 	2–4 
+Main work total 	Accounts and Contacts	13–27 
+Link records across systems, if needed 	Make sure the same person keeps the same ID across systems. 	3–8 
+Bring Dynamics changes back, if needed 	See Table 2. 	5–10 
+Refresh the marketing data, if needed 	Make sure HubSpot is up to date. 	1–3 
+Total   	 Accounts and Contacts	About 22–48 days 
+Total including all extra Objects	All other reminding entities..i.e. Gifts, Events	All other entities 45-80 Days
+
+Work on other record types—such as gifts, events and memberships—is separate from this Contact and Account estimate – which should involve just testing and checking the correct processing is already in place. The whole job is provisionally estimated at about 45–80 days, including those additional record types. This is a planning estimate. 
+ 
+
+Table 2: Bringing Dynamics Changes back into Snowflake (“reverse ETL for Alexander Griffiths”)
+Part 	In plain words 	Days 
+Contacts and Accounts 	Bring staff edits in Dynamics back to Snowflake so the master record stays up to date. The main steps are written but switched off; the known fault needs fixing before testing. 	8–13 
+All other Objects types 	Extend the process to the remaining types, reusing the pattern established for Contacts and Accounts. 	22–38 
+
+Key point: Table 1 covers sending data to Dynamics. Table 2 covers bringing Dynamics changes back into Snowflake. These are separate flows. The estimates are rough, and much of the work is verification and testing of existing code. Check that shared items—such as mapping, ADF work, XREF and testing—aren’t counted twice when calculating the overall total.
+
+Suggested approach: Prove one object end to end first, then reuse that pattern for the rest.
+
+Alexander Griffiths asked for an estimate of additional work. This estimate can be seen here.
+Reverse ETL from Dynamics To Snowflake (Estimate for Alexander) 
+Establish the current state of the Snowflake, MDM and ADF implementation.
+
+ Catelog Existing Code 30-11-2026
+—	 		Means in DEV, but not in Test/Prod
+       No Change  	Means in DEV and Test/Prod with same code
+        Changed 		Means Code changed compared to prior environment 
+ 
+Object	Directory	NAS TEST	NAS
+PROD
+FF_NAS_AVRO	AUDIT_DB\Config\File Formats	—	—
+FF_NAS_CSV	AUDIT_DB\Config\File Formats	—	—
+FF_NAS_JSON	AUDIT_DB\Config\File Formats	—	—
+PIPELINE_METADATA	AUDIT_DB\Config\Tables	No change	No change
+PIPELINE_WATERMARK	AUDIT_DB\Config\Tables	No change	No change
+DT_D365_ACCOUNT_PAYLOAD	INTEGRATION_DB\DYNAMICS\Dynamic tables	—	—
+DT_D365_CONTACT_PAYLOAD	INTEGRATION_DB\DYNAMICS\Dynamic tables	—	—
+VW_D365_ACCOUNT	INTEGRATION_DB\DYNAMICS\Views	Changed	No change
+VW_D365_CAMPAIGN	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_CONNECTIONROLE	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_CONTACT	INTEGRATION_DB\DYNAMICS\Views	No change	No change
+VW_D365_MHA_CONSENTTYPE	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_MHA_RELATIONSHIPTYPE	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_MHA_TITLE	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_MSNFP_APPEAL	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_MSNFP_DESIGNATION	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_MSNFP_EVENT	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_MSNFP_PACKAGE	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_REF_ADDRESS_TYPE	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_REF_APPEAL_EVENT	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_REF_COMMUNITY_APPEAL	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_REF_CONSENT_RULE	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_REF_COUNTRY_ALIAS	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_REF_GIFT_TYPE	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_REF_LOAD_GATE	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_REF_PARTICIPANT_STATUS	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_REF_PLEDGE_STATUS	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_REF_PROPOSAL_STATUS	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_REF_SCHEDULE_STATUS	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_REF_TRIBUTE_TYPE	INTEGRATION_DB\DYNAMICS\Views	—	—
+VW_D365_REQUESTS	INTEGRATION_DB\DYNAMICS\Views	No change	No change
+SP_GENERATE_GOLDEN_RECORDS()	MDM_DB\GOLD\Procedures	No change	No change
+SP_GOLDEN_RECORDS()	MDM_DB\GOLD\Procedures	—	—
+SP_XREF_CAPTURE(VARCHAR, VARCHAR, VARCHAR)	MDM_DB\GOLD\Procedures	No change	No change
+SP_XREF_CAPTURE_D365_ID(VARCHAR, VARCHAR, VARCHAR)	MDM_DB\GOLD\Procedures	No change	No change
+SP_XREF_CAPTURE_RE_ID(VARCHAR, VARCHAR)	MDM_DB\GOLD\Procedures	No change	No change
+SEQ_GOLDEN_RECORD_ID	MDM_DB\GOLD\Sequences	—	—
+GDPR_SUPPRESSED_GOLDEN_RECORDS	MDM_DB\GOLD\Tables	No change	No change
+GOLDEN_RECORDS	MDM_DB\GOLD\Tables	Changed	No change
+XREF	MDM_DB\GOLD\Tables	No change	No change
+SEQ_GOLDEN_RECORD_ID	MDM_DB\GOLD\Views	—	—
+VW_GOLDEN_RECORD_IDS	MDM_DB\GOLD\Views	—	—
+SP_BUILD_MATCH_GROUPS()	MDM_DB\MDM\Procedures	Changed	No change
+SP_MATCHING()	MDM_DB\MDM\Procedures	—	—
+SP_VALIDATE_MDM()	MDM_DB\MDM\Procedures	Changed	No change
+SP_VALIDATION()	MDM_DB\MDM\Procedures	—	—
+CMP_PROD_GROUPS	MDM_DB\MDM\Tables	—	—
+CMP_VIEW_DEV	MDM_DB\MDM\Tables	—	—
+CMP_VIEW_PROD	MDM_DB\MDM\Tables	—	—
+MATCH_CONFIG	MDM_DB\MDM\Tables	—	—
+MATCH_GROUP_MEMBERS	MDM_DB\MDM\Tables	No change	No change
+MATCH_GROUPS	MDM_DB\MDM\Tables	No change	No change
+MATCH_OVERRIDES	MDM_DB\MDM\Tables	—	—
+STEWARDSHIP_APPROVALS	MDM_DB\MDM\Tables	—	—
+STEWARDSHIP_AUDIT	MDM_DB\MDM\Tables	No change	No change
+STEWARDSHIP_NOTES	MDM_DB\MDM\Tables	No change	No change
+SURVIVORSHIP_RULES	MDM_DB\MDM\Tables	No change	No change
+BUILD_MATCH_COMPONENTS()	MDM_DB\Staging\Procedures	—	—
+SP_BUILD_MATCH_COMPONENTS()	MDM_DB\Staging\Procedures	Changed	No change
+SP_ETL_DYNAMICS()	MDM_DB\Staging\Procedures	No change	No change
+SP_ETL_HUBSPOT()	MDM_DB\Staging\Procedures	No change	No change
+SP_ETL_RAISERS_EDGE()	MDM_DB\Staging\Procedures	No change	No change
+SP_EXTRACT_MATCH_ATTRIBUTES()	MDM_DB\Staging\Procedures	—	—
+SP_GENERATE_MATCH_PAIRS()	MDM_DB\Staging\Procedures	—	—
+SP_SCORE_MATCH_CANDIDATES()	MDM_DB\Staging\Procedures	—	—
+SP_STANDARDISE_RECORDS()	MDM_DB\Staging\Procedures	No change	No change
+CMP_OLD_CANDIDATES	MDM_DB\Staging\Tables	—	—
+CMP_OLD_GROUPS	MDM_DB\Staging\Tables	—	—
+CMP_OLD_MEMBERS	MDM_DB\Staging\Tables	—	—
+MATCH_ATTR_ADDRESSES	MDM_DB\Staging\Tables	—	—
+MATCH_ATTR_EMAILS	MDM_DB\Staging\Tables	—	—
+MATCH_ATTR_ORG_KEYS	MDM_DB\Staging\Tables	—	—
+MATCH_ATTR_PHONES	MDM_DB\Staging\Tables	—	—
+MATCH_ATTR_RE_LINKS	MDM_DB\Staging\Tables	—	—
+MATCH_ATTR_RECORDS	MDM_DB\Staging\Tables	—	—
+MATCH_CANDIDATES	MDM_DB\Staging\Tables	Changed	No change
+MATCH_COMPONENTS	MDM_DB\Staging\Tables	No change	No change
+MATCH_PAIR_FLAGS	MDM_DB\Staging\Tables	—	—
+MATCH_PROPOSALS	MDM_DB\Staging\Tables	—	—
+STANDARDISED_RECORDS	MDM_DB\Staging\Tables	No change	No change
+STANDARDISED_RECORDS_20260715	MDM_DB\Staging\Tables	—	Added in PROD
+TK_BUILD_MATCH_GROUPS	MDM_DB\Staging\Tasks	Changed	Changed
+TK_GENERATE_GOLDEN_RECORDS	MDM_DB\Staging\Tasks	Changed	Changed
+TK_STANDARDISE_RECORDS	MDM_DB\Staging\Tasks	Changed	Changed
+RE_REQUESTS	RAW\RAISERS_EDGE\Tables	—	—
+VW_DUPLICATE_GOLDEN_RECORDS_WITH_GIFTS	RAW\RAISERS_EDGE\Views	—	—
+VW_ENRICHED	RAW\RAISERS_EDGE\Views	—	—
+VW_HS_ENRICHED	RAW\RAISERS_EDGE\Views	—	—
+VW_RE_CONSTITUENT	RAW\RAISERS_EDGE\Views	—	—
+VW_RE_CONSTITUENT_CODES	RAW\RAISERS_EDGE\Views	—	—
+VW_RE_CUSTOM_FIELD_COLLECTIONS	RAW\RAISERS_EDGE\Views	—	—
+VW_RE_CUSTOM_FIELDS	RAW\RAISERS_EDGE\Views	—	—
+VW_RE_CUSTOM_FIELDS_NEW	RAW\RAISERS_EDGE\Views	—	—
+VW_RE_EMAILS	RAW\RAISERS_EDGE\Views	—	—
+VW_RE_ENRICHED	RAW\RAISERS_EDGE\Views	—	—
+VW_RE_PHONE_COLLECTIONS	RAW\RAISERS_EDGE\Views	—	—
+VW_RE_PHONES	RAW\RAISERS_EDGE\Views	—	—
+VW_RE_REQUESTS	RAW\RAISERS_EDGE\Views	—	—
+VW_RE_REQUESTS_DEBUG	RAW\RAISERS_EDGE\Views	—	—
+VW_RE_SOLICIT_CODES	RAW\RAISERS_EDGE\Views	—	—
+
+ 
+
+Tasks  in MDM 
+
+Task	DEV folder path	TEST	PROD	Status
+TK_STANDARDISE_RECORDS	MDM_DB\Staging\Tasks
+Present	Present	Started
+TK_BUILD_MATCH_GROUPS	MDM_DB\Staging\Tasks
+Present	Present	Started
+TK_GENERATE_GOLDEN_RECORDS	MDM_DB\Staging\Tasks
+Present	Present	Started
+
+Task history shows successful daily execution of the standardisation, match-group, and golden-record task chain; record-level outcomes 
+Dynamic Tables
+
+Object	DEV folder path	TEST export	PROD export	Finding
+DT_D365_ACCOUNT_PAYLOAD	INTEGRATION_DB\DYNAMICS\Dynamic tables
+No definition file found	No definition file found	Definition file found in DEV 
+DT_D365_CONTACT_PAYLOAD	INTEGRATION_DB\DYNAMICS\Dynamic tables
+No definition file found	No definition file found	Definition file found in DEV  
+As at the time of writing, there is no evidence that Dynamic Tables are used beyond DEV.
+ 
+
+Current Raisers Edge / Snowflake Processing
+  
+
+ 
+
+
+Raisers Edge Source Tables and Corresponding Snowflake Tables 
+
+ 
+
+This script shows the source (Raisers Edge Tables and their target tables on Snowflake)
+
+SELECT ENTITY_ID, SOURCE_TYPE, API_BASE_URL, API_ENDPOINT,
+       LOAD_TYPE, TARGET_SCHEMA, TARGET_TABLE, STAGING_PATH, ENABLED
+FROM AUDIT_DB.CONFIG.PIPELINE_METADATA
+ORDER BY SOURCE_TYPE, ENTITY_ID;
+
+ 
+
+ 
+
+Proof All 72 Raiser’s Edge Tables Being Read 
+
+Using  SELECT * FROM AUDIT_DB.CONFIG.PIPELINE_WATERMARK  gives:
+ 
+Entity 	Rows 	Modified 
+T_RegularGivingSplits 	77,059 	2026-11-03 04:03:32.234 Z 
+T_ProposalNotes 	9,336 	2026-11-03 04:03:17.969 Z 
+T_PhoneNumbers 	625,333 	2026-11-03 04:03:32.869 Z 
+T_GiftSplits 	4,406,386 	2026-11-03 04:03:38.986 Z 
+T_EventAttributes 	1,685 	2026-11-03 04:03:13.588 Z 
+T_ConstituentSolicitCodes 	28,500 	2026-11-03 04:06:05.231 Z 
+T_CashPaymentSplits 	2,480,598 	2026-11-03 04:06:30.643 Z 
+T_WebAddresses 	3,735 	2026-11-03 04:05:59.276 Z 
+T_SoftCredits 	904,620 	2026-11-03 04:06:28.266 Z 
+T_TaxDeclarations 	176,153 	2026-11-03 04:06:03.568 Z 
+T_Prospects 	25,166 	2026-11-03 04:07:37.629 Z 
+T_MembershipAttributes 	33,965 	2026-11-03 04:07:47.462 Z 
+T_ProposalAttributes 	21,606 	2026-11-03 04:07:42.359 Z 
+T_Volunteers 	17,948 	2026-11-03 04:07:47.028 Z 
+T_Funds 	925 	2026-11-03 04:08:11.231 Z 
+T_Gifts 	4,360,759 	2026-11-03 04:10:20.202 Z 
+T_PledgeSplits 	21,341 	2026-11-03 04:08:44.295 Z 
+T_EventParticipants 	526,256 	2026-11-03 04:08:45.811 Z 
+T_MembershipGifts 	361,901 	2026-11-03 04:08:45.850 Z 
+T_Relationships 	435,177 	2026-11-03 04:09:20.838 Z 
+T_Complaints 	421 	2026-11-03 04:11:27.366 Z 
+T_Proposals 	37,754 	2026-11-03 04:09:42.568 Z 
+T_GiftAttributes 	6,302,877 	2026-11-03 04:10:26.007 Z 
+T_AutismProfessionalWorkSectors 	84,032 	2026-11-03 04:09:31.565 Z 
+T_EventParticipantGifts 	37,358 	2026-11-03 04:10:32.088 Z 
+T_Appeals 	3,272 	2026-11-03 04:12:20.103 Z 
+T_EmailAddresses 	1,241,408 	2026-11-03 04:10:41.830 Z 
+T_Membership 	64,912 	2026-11-03 04:11:18.237 Z 
+TConstituentSalutationExtracts_Tasks 	7,018,739 	2026-11-03 04:11:13.369 Z 
+T_ConstituentAttributes 	7,133,161 	2026-11-03 04:12:11.504 Z 
+T_ConstituentSalutations 	814,816 	2026-11-03 04:13:22.171 Z 
+T_EventParticipantAttributes 	1,329,617 	2026-11-03 04:11:47.486 Z 
+T_Constituent 	1,398,024 	2026-11-03 04:12:38.355 Z 
+T_Campaigns 	155 	2026-11-03 04:12:01.970 Z 
+T_ConstituentAddressAttributes 	2,515,731 	2026-11-03 04:13:13.898 Z 
+T_Areas 	3,530 	2026-11-03 04:14:13.151 Z 
+T_ConstituentAliases 	98,201 	2026-11-03 04:12:37.652 Z 
+T_ActionsDelta 	89 	2026-11-03 04:13:31.394 Z 
+T_CodeDescriptions 	16,999 	2026-11-03 04:12:55.789 Z 
+T_AutismProfessionals 	96,690 	2026-11-03 04:14:07.685 Z 
+T_AddressAreas 	9,853,612 	2026-11-03 04:17:53.620 Z 
+T_ActionAttributes 	27,140,446 	2026-11-03 04:19:12.163 Z 
+T_ActionCanvassers 	48,706,938 	2026-11-03 04:17:23.398 Z 
+T_ActionNotes 	70,757,820 	2026-11-03 05:34:27.834 Z 
+T_Actions 	73,563,949 	2026-11-03 04:31:39.274 Z 
+T_ActionNotesDelta 	66 	2026-11-03 04:18:43.667 Z 
+T_AddressesDelta 	274 	2026-11-03 04:20:10.987 Z 
+T_AreaTypes 	31 	2026-11-03 04:18:11.309 Z 
+T_CashPayments 	2,480,058 	2026-11-03 05:35:35.118 Z 
+TConstituentSalutationExtracts 	1,413,985 	2026-11-03 04:35:53.505 Z 
+T_ConstituentTypes 	2,662,304 	2026-11-03 04:19:49.260 Z 
+T_ConstituentConnectionWithAutism 	755,798 	2026-11-03 04:21:08.155 Z 
+T_Events 	1,998 	2026-11-03 04:19:02.790 Z 
+T_EmailCommunications 	68,708,929 	2026-11-03 05:43:07.369 Z 
+T_PledgeGifts 	89,180 	2026-11-03 04:40:06.334 Z 
+T_ConstituentAppeals 	3,767,650 	2026-11-03 04:23:25.892 Z 
+TConstituentSalutationExtracts_Events 	768,663 	2026-11-03 04:22:11.124 Z 
+T_TributeAcknowledgees 	5,274 	2026-11-03 04:19:48.869 Z 
+T_ContactPermissions 	1,398,024 	2026-11-03 05:43:55.006 Z 
+T_RegularGiving 	76,332 	2026-11-03 04:43:01.558 Z 
+T_EventParticipantFees 	40,906 	2026-11-03 04:24:17.819 Z 
+T_TableDeltas 	3 	2026-11-03 04:23:09.012 Z 
+T_Packages 	3,493 	2026-11-03 04:20:35.632 Z 
+T_RegularGivingGifts 	1,545,989 	2026-11-03 05:44:47.087 Z 
+T_Pledges 	21,330 	2026-11-03 04:44:02.442 Z 
+T_Tributes 	4,652 	2026-11-03 04:25:11.364 Z 
+T_Addresses 	2,016,661 	2026-11-03 04:24:31.461 Z 
+TTEMPProfAttr 	604,258 	2026-11-03 04:21:43.496 Z 
+T_AutismProfessionalClientAgeGroups 	81,647 	2026-11-03 05:45:29.609 Z 
+T_ConstituentAddresses 	2,120,629 	2026-11-03 04:46:45.185 Z 
+T_ConstituentNotes 	412,012 	2026-11-03 04:27:07.942 Z 
+T_EventPrices 	1,117 	2026-11-03 04:25:16.474 Z 
+
+ 
+
+Proof Target Table Columns being Populated 
+
+Check that the Raisers Edge fields in the migration mapping actually arrive in Snowflake with data, we need to see which fields were filled by last night's load.
+The data is loaded and then cleared from the landing tables within seconds, so it can't be inspected the next day. Query history records when this happened, which lets me look at the data as it stood just after loading.
+The check is read-only. It doesn't change or remove any data, and no data leaves Snowflake. It writes only to temporary working tables that disappear when the session ends.
+A list showing which fields have data and which are empty. I'll compare it with the mapping document supplied by Alexander/to show what is working and what still needs to be done for the Dynamics migration.
+Two limits to be aware of, if you want to be upfront: it covers one night's load, and it skips the eight largest tables, which would need a separate run.
+
+USE DATABASE AUDIT_DB;
+USE SCHEMA CONFIG;
+CREATE OR REPLACE TEMPORARY TABLE TMP_STG_COL_POP (
+    TABLE_NAME STRING, TRUNCATE_QUERY_ID STRING, COLUMN_NAME STRING,
+    TOTAL_ROWS NUMBER, POPULATED NUMBER
+);
+CREATE OR REPLACE TEMPORARY TABLE TMP_STG_COL_POP_ERR (
+    TABLE_NAME STRING, TRUNCATE_QUERY_ID STRING, ERROR_MSG STRING
+);
+ 
+EXECUTE IMMEDIATE $$
+DECLARE
+  c1 CURSOR FOR
+    SELECT tr.TBL, tr.QUERY_ID
+    FROM (
+      SELECT UPPER(REGEXP_SUBSTR(QUERY_TEXT, 'STG_T_[A-Za-z0-9_]+')) AS TBL, QUERY_ID
+      FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+      WHERE QUERY_TYPE = 'TRUNCATE_TABLE'
+        AND EXECUTION_STATUS = 'SUCCESS'
+        AND QUERY_TEXT ILIKE 'TRUNCATE TABLE RAW.RAISERS_EDGE.STG_T_%'
+        AND START_TIME > DATEADD(hour, -30, CURRENT_TIMESTAMP())
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY TBL ORDER BY START_TIME DESC) = 1
+    ) tr
+    LEFT JOIN AUDIT_DB.CONFIG.PIPELINE_WATERMARK w
+      ON w.PIPELINE_ID = 'RAISERS_EDGE'
+     AND UPPER('STG_' || w.ENTITY_ID) = tr.TBL
+    WHERE COALESCE(w.LAST_RUN_ROWS, 0) <= 5000000;
+  tbl STRING;
+  qid STRING;
+BEGIN
+  FOR r IN c1 DO
+    tbl := r.TBL;
+    qid := r.QUERY_ID;
+    BEGIN
+      EXECUTE IMMEDIATE
+        'INSERT INTO TMP_STG_COL_POP ' ||
+        'SELECT ''' || tbl || ''', ''' || qid || ''', f.key, COUNT(*), ' ||
+        'COUNT_IF(NULLIF(f.value::STRING, '''') IS NOT NULL) ' ||
+        'FROM (SELECT OBJECT_CONSTRUCT_KEEP_NULL(*) AS OBJ ' ||
+        'FROM RAW.RAISERS_EDGE.' || tbl || ' BEFORE (STATEMENT => ''' || qid || ''')) t, ' ||
+        'LATERAL FLATTEN(INPUT => t.OBJ) f GROUP BY f.key';
+    EXCEPTION
+      WHEN OTHER THEN
+        INSERT INTO TMP_STG_COL_POP_ERR VALUES (:tbl, :qid, :SQLERRM);
+    END;
+  END FOR;
+  RETURN 'done';
+END;  $$;
+
+
+-- All Raw Staging Columns Populated by Nightly Run 
+SELECT TABLE_NAME, COLUMN_NAME, TOTAL_ROWS, POPULATED,
+       ROUND(100 * POPULATED / NULLIF(TOTAL_ROWS, 0), 1) AS PCT_POPULATED
+FROM TMP_STG_COL_POP
+ORDER BY TABLE_NAME, COLUMN_NAME;
+ 
+-- Staging Columns that are completely empty
+SELECT TABLE_NAME, COLUMN_NAME FROM TMP_STG_COL_POP
+WHERE POPULATED = 0 ORDER BY 1, 2;
+ 
+Identify the work completed and still required for the Dynamics migration (Estimate)
+
+So far, 2 objects Contacts and Account are working. During the initial talks  36 were mentioned. These objects are assumed to be Gifts etc – leaving 34 to be implemented. 
+Work completed (present in code or design)
+Area 	Evidence 
+Raisers Edge → Snowflake → MDM → HubSpot 	Completed by the incumbent partner. 
+MDM chain 	The standardise → match → golden-record task chain runs daily at 06:00 UTC. 
+Identity matching, deduplication, enrichment, and golden-record lifecycle 	Present in the SQL. 0 days for testing only. 
+Dynamics ODS and Dynamics-to-MDM ETL 	The Dynamics ODS appears to exist. SP_ETL_DYNAMICS() is written for Contact and Account. 
+Dynamics payloads (Contact and Account) 	DT_D365_CONTACT_PAYLOAD, DT_D365_ACCOUNT_PAYLOAD, and VW_D365_REQUESTS (the hand-off view) are present, with write-back state. DEV also has 24 Dynamics views. 
+Mapping 	Initial talk stated about 2,000 tables grouped into about 36 objects. The spec cites 81 entities and 3,985 field rows. Assume for now that 34 other objects need to be built outside CONTACT and ACCOUNT
+
+ 
+
+Work still required
+
+Item 	Gap 	Estimated days 
+Review mappings and close gaps 	Only Contact and Account exist as payloads. Other entities have no payloads yet. 	3–8 
+Test ADF loads to Dynamics and fix defects 	ADF has to be tested and possibly repaired. From Raisers Edge to Snowflake ADF works. From Snowflake (MDM) to Dynamics still needs to be tested 	3–5 
+Ten test/UAT loads 	Reconcile Snowflake against Dynamics and investigate rejects. 	5–10 
+Production cutover 	One cutover with post-load reconciliation. 	2–4 
+Core total  		13–27 
+Constituent resolution / XREF 	The SP_XREF_CAPTURE* procedures are empty in the exports. Unsure, if this is correct or not. If incorrect here is the estimate	3–8 
+Dynamics-to-Snowflake ingestion, if required 	SP_ETL_DYNAMICS() is disabled at line 12, and the known issue is unfixed. This will stop the Reverse ETL	5–10 
+HubSpot refresh, if required 		1–3 
+Conditional Total		9-21
+Total (core plus conditional)		About 22–48 days
+
+ 
+Confirm technical boundary between NAS integration work and Dynamics-side activities.
+
+Integration Responsibilities
+NAS side (integration) 	Dynamics partner side 
+Snowflake data layers: Load Raiser’s Edge data into Snowflake through ADF (STG_T_*, then ODS_T_*) and pull Dynamics data into Snowflake. 	Landing zone: Provide and maintain the endpoint NAS pushes to, including its availability and environments (such as a test environment). 
+MDM: Standardise and match records; maintain golden records and cross-references between source IDs. 	API: Define the contract, authentication requirements, and rate and payload-size limits. 
+Mapping to Dynamics fields: Apply the agreed workbook, business rules, and lookup values. 	Field names and keys: Provide the target schema, required fields, and accepted option-set values. 
+Payload build: Create VW_D365_CONTACT, VW_D365_ACCOUNT, and the payload tables. Build POST or PATCH requests within batch limits and load gates. 	Validation: Define acceptance and rejection rules, duplicate handling, and error responses. 
+Push (ADF): Send ready-to-send payloads to the API, with retries and monitoring. 	Inside Dynamics: Own configuration, plug-ins, workflows, security, and user access. 
+ID capture: Store the returned Dynamics ID for each record in XREF and D365_WRITEBACK_STATE, alongside the legacy Raiser’s Edge ID. 	Dynamics documentation: Provide data-model documentation and fix landing-zone defects. 
+Data quality and reconciliation: Check what NAS sends and handle failed records on the NAS side. 	Cut-over inside Dynamics: Own go-live, user acceptance, and Dynamics-side data checks. 
+
+Hand-off Point 
+Snowflake exposes ready-to-send rows per Dynamics entity (request type, key, JSON body) and accepts back a result per row (success, failure, returned Dynamics ID).
+ 
+
+Snowflake To Dynamics Boundary (Diagram) 
+
+ 
+Provisional Questions
+1. Do you agree with this split, and who builds and runs the ADF push?
+2. What does the landing zone accept (formats, limits, keys, error responses, authentication)?
+3. Which field holds the legacy Raisers Edge ID, and who maintains it?
+4. Who handles records the landing zone rejects, and how are they reported back?
+5. Is there a Dynamics test environment for dress rehearsals, and when?
+6. Is the mapping workbook the agreed source of truth, and who updates it?
+ 
+Assess Complexity, Dependencies, Risks and Delivery Sequence.
+Complexity
+Item 	Complexity 	Assessment 
+Contact and Account migration 	Low–medium 	The ETL, payload views and write-back state exist. The main work is verification and fixes. 
+XREF / ID capture 	Medium 	The procedures are empty in the exports. If they are also empty in live Snowflake, ID capture needs to be built. This determines whether subsequent records create or update Dynamics records. 
+ADF to Dynamics 	Medium; uncertain 	The route is untested, connection issues have been observed, and the folders contain no ADF evidence. Authentication, retries and landing-zone limits remain unconfirmed. 
+Dynamics-to-Snowflake ingestion 	Low–medium 	SP_ETL_DYNAMICS() is written, but the known issue must be fixed and the raw load verified before it is enabled. 
+Other entities: gifts, events, memberships, tax and others 	Medium–high 	No payloads exist for these entities. The golden-record model covers people and organisations, so transactional objects may need new structures. 
+Mapping closure 	Medium–high 	About half the required fields lack a source, and some still depend on Raisers Edge. 
+Environments and deployment 	Medium 	TEST and PROD are separate accounts. DEV has 69 objects absent from TEST and PROD. 
+Dependencies
+Dependency 	Needed for 	Owner 
+Close mapping gaps and identify replacement sources for Raisers Edge fields 	All payloads 	NAS; incumbent partner 
+Confirm landing-zone or API formats, limits, keys, errors and authentication 	ADF test loads 	Dynamics partner 
+Provide a Dynamics test environment 	UAT loads and dress rehearsal 	Dynamics partner; NAS 
+Identify the field holding the legacy Raisers Edge ID 	XREF and matching 	Dynamics partner; NAS 
+Provide ADF access and configuration exports 	ADF verification 	NAS 
+Provide read-only access to Snowflake DEV, TEST and PROD 	Live verification 	NAS 
+Fix the known issue: exact organisation-name match without a postcode check 	Enabling Dynamics ETL 	Incumbent partner; engineer 
+Agree when Raisers Edge becomes static 	Production cutover 	NAS 
+Confirm which entities and phases are in scope 	Estimate and delivery sequence 	NAS 
+Assign responsibility for building and running the ADF push 	ADF delivery 	Open question 
+Risks
+ 	Risk 	Impact 	Likelihood 	Mitigation 
+1 	XREF procedures are empty in live Snowflake 	Duplicate records or failed updates in Dynamics 	Medium 	Compare the live definitions using GET_DDL, then test ID capture. 
+2 	The known issue incorrectly merges organisations 	Incorrect golden records reach Dynamics 	Medium–high 	Fix and validate in TEST before enabling the flow. 
+3 	ADF to Dynamics fails or is misconfigured 	Test loads are delayed 	Medium 	Verify the connection early with a small load. 
+4 	The Dynamics test environment or landing-zone details arrive late 	The critical path stalls 	High 	Request both now. 
+5 	Mapping gaps remain unresolved 	Rework and rejected records 	High 	Close gaps or de-scope fields before building payloads. 
+6 	Scope expands to other entities and donations 	Estimates increase materially 	Medium 	Agree the entity list in writing. 
+7 	DEV objects are not promoted to TEST and PROD 	Flows cannot run in those environments 	Medium 	Create a promotion plan and check object parity. 
+8 	Outbound writes and inbound extracts create an echo loop 	Repeated changes or overwritten values 	Low–medium 	Verify write-back state and hash logic. 
+9 	Dynamics edits do not survive golden-record rules 	Data diverges after go-live 	Unknown 	Review survivorship rules and test representative edits. 
+10 	The repository differs from deployed code, and Azure DevOps access is unavailable 	Environment drift goes undetected 	Medium 	Treat live Snowflake as the source of truth and extract DDL. 
+11 	The incumbent’s large quote reflects genuine unknowns 	Work is underestimated 	Unknown 	Validate the live state before committing to the estimate. 
+Delivery sequence
+Phase 	Work 	Estimated days 	Sequencing and parallel work 
+0 	Verify live task state, DDL, ADF, XREF and missing objects; agree scope and cut-off decisions 	3–5 	Start here. 
+1 	Close mappings and produce a gap report 	3–8 	Can overlap with phase 0 once scope is agreed. 
+2 	Build or fix XREF if needed; fix the known matching issue 	3–8 for XREF; 1–2 for matching 	Two engineers can work on these separately, but will probably just 1. 
+3 	Test ADF loads to Dynamics and fix defects 	3–5 	Begins after phase 0; can overlap with phase 2. 
+4 	Enable and validate Dynamics-to-Snowflake ingestion, if required 	5–10 	Follows the matching fix and raw-load verification. 
+5 	Run ten test/UAT loads and reconcile results 	5–10 	Follows mapping closure, required fixes and ADF testing. 
+6 	Complete production cutover and post-load reconciliation 	2–4 	Follows successful UAT. 
+7 	Build other entities, if in scope 	19–35+ 	Entity groups can progress independently once the supporter ID pattern is proven. 
+
+ 
+Identify tasks that can run in parallel
+
+Parallel work: With two engineers, XREF and matching fixes can progress alongside ADF testing. Other-entity groups can also be developed in parallel after the supporter ID pattern is proven. Parallel work may shorten elapsed time, but it does not reduce the total person-days; elapsed time will depend on dependencies and environment availability.
+ 
+Reverse ETL from Dynamics To Snowflake (Estimate for Alexander)
+
+ 
+ 
+The golden record is the consolidated version of each person or organisation. It's the point where Dynamics data has been absorbed into Snowflake.
+What the golden record does next It's the starting point for the other direction. INTEGRATION_DB.DYNAMICS builds payloads from the golden records, 
+and VW_D365_REQUESTS generates the POST/PATCH calls. Those go back to the Dynamics API, and the XREF procedure stores the Dynamics ID. HubSpot is fed from the golden records too.
+
+The estimates of this task is below
+ 
+
+Set 1: Contacts and Accounts
+Task 	Estimated days 
+Get up to speed on the MDM flow 	1–2 
+Confirm the raw load into ODS CONTACTS / ODS ACCOUNTS 	0.5–1 
+Fix and test the known issue (org-name match with no postcode check) 	1–2 
+Run in TEST and reconcile counts, deletes, and arrays 	1–2 
+Check XREF / D365 ID capture and echo-loop behaviour 	1–2 
+Enable, run end to end, and promote to PROD 	1 
+Subtotal 	5–10 
+ADF: check, or fix at worst 	+3 
+Total 	About 8–13 days 
+
+Set 2:  The Rest, about 34 Objects
+It is assumed that once Contacts and Accounts have been ingested into MDM from Dynamics, a pattern will have already been established, so ingesting objects like Gifts in theory will be very straight-forward
+
+Group (assumed) 	Estimated days 
+Transactional (about 6) 	8–14 
+Supporter-related (about 8) 	5–9 
+Reference and low-volume (about 20) 	3–7 
+Shared work: reusable pattern, tests, reconciliation 	3–5 
+Subtotal 	19–35 
+ADF: add and configure the new entities, plus fixes 	+3 
+Critical Path 
+
+Critical path: live verification → mapping closure and Dynamics test-environment readiness → ADF tests → UAT loads → cutover.
+
+Where AI  Can Help
+
+Work item 	Human-first estimate 	How AI could help 	Potential saving 
+Generate payload views and JSON bodies for other entities from mapping rows 	12–24 days (Spec 2, Flow B) 	Generate SQL  from the mapping workbook for an engineer to review and test. 	30–50% if the mapping is clean 
+Build raw-to-staging ETL for further objects 	19–35 days for the remaining objects 	Clone and adapt the proven SP_ETL_DYNAMICS() pattern, then validate each object. 	30–40% 
+Review mappings and report gaps 	3–8 days 	Compare the mapping workbook with the views and flag unmapped fields. 	30–50% 
+Catalogue and document code 	Included in verification 	Summarise procedures and views for engineer review. 	50%+ 
+Write test SQL and reconciliation queries 	Part of the 5–10 days for UAT loads 	Generate count, hash and difference queries. 	20–40% 
+Draft specifications and acceptance criteria 	Not estimated 	Draft from the code for review. 	Potentially substantial, but not on the delivery path. 
+Where AI helps little or not at all
+AI can speed up repeatable drafting, but it cannot confirm that a mapping is correct, resolve missing source fields, provide access to Snowflake or Dynamics, or make an unreliable ADF connection work. Engineers still need to review generated code, test it against real data, investigate rejects and approve the production cutover.
+These savings are indicative, not additive. Some work items overlap, and the estimates depend on the quality of the mappings and the availability of working environments.
+ 
+Notes
+
+This is just an area for adhoc notes…..
+
+Raisers Edge / Snowflake to Dynamics 365: Mapping and Migration Status
+So, in Snowflake to show landed Raisers Edge data  i.e. 
+
+SELECT * FROM RAW.RAISERS_EDGE.STG_T_ACTIONATTRIBUTES LIMIT 100;
+SELECT * FROM RAW.RAISERS_EDGE.STG_T_PHONENUMBERS LIMIT 100;
+
+From Staging to View used
+ 
+ 
+
+
+
+
+
+
+
+
+
+Raiser’s source Data reaching Standardized records
+
+ 
+ 
+
+ 
+
+  
+
+- Did the run process the expected sources and records?
+- Were records rejected, skipped, or duplicated?
+- Do source, staging, MDM, and destination counts reconcile?
+- Are identifiers and create/update behavior correct?
+- Are errors, retries, and writeback recorded as expected?
+
+Run controlled tests in a non-production environment. Avoid calling procedures in PROD just to test them; they may change data.
+
+### 4. Verify ADF
+
+In the Azure portal or exported ADF configuration, inspect each relevant pipeline, trigger, linked service, and integration runtime. In **Monitor**, check recent pipeline and activity runs, failures, retries, duration, and trigger history. Then reconcile ADF run outcomes with Snowflake’s load records and row counts. Don’t include credentials or secret values in your evidence.
+
+### 5. Capture the evidence
+
+Add fields to your matrix for **deployed definition**, **enabled/state**, **last successful run**, **test/reconciliation evidence**, **source/date**, and **status**. Keep file comparison, live deployment, and operational evidence distinct.
+
+For example, your existing table can identify mismatches in the local exports; Snowflake metadata and run history, plus ADF Monitor evidence, establish what is actually deployed and operating.
+ 
+1.	Establish the current state of the Snowflake, MDM and ADF implementation.
+ 
+ 
+
+TR – If Testing is required, see Additional Workdays
+	Requirement	Comments	Additional Work (Days)	Status
+	Identity Matching	Identity matching is implemented in the design. Candidate pairs are flagged as identity-grade when they have an authoritative ID match, or a shared email/mobile plus exact first and last names. These matches are treated as strong links and can be included in match groups. Runtime behaviour should be confirmed against the configured overrides and production data - MDM.MATCH_OVERRIDES is a configuration table that lets specific match rules—such as an exact authoritative ID match—assign a score and determine whether a candidate is linking or identity-grade	1	TR
+	Deduplication	The procedures find records that look like duplicates and put them into groups. They mark the most recently updated record as the one to keep, but they don’t combine the records or remove the others. That would need to happen in a separate step.  We need to check downstream what happens to the records not marked	1	TR
+	Data Enrichment	Yes—the SQL implements data enrichment for golden records. SP_GENERATE_GOLDEN_RECORDS() takes the latest record in each group as the primary source, fills its missing fields from the most complete group member, and combines group emails, phones, and addresses into the golden record. It also leaves manually edited golden records untouched.
+
+The task is scheduled after matching, so enrichment is part of the defined pipeline. This confirms the design is present in the code; it doesn’t verify a live run or the quality of its results.	1	TR
+	Golden Record Management	The SQL shows substantial golden-record management is implemented. The generation procedure creates or updates golden records, preserves existing IDs where possible, deactivates records superseded by merges, maintains source-to-golden-record links in XREF, and backfills golden IDs to active standardized records. It also avoids overwriting records marked as manually edited.
+So the core record lifecycle and linkage appear covered in the design.
+	0	TR
+	Constituent Resolution	Constituent resolution appears to be covered in the design. The pipeline links HubSpot records to Raisers Edge constituent IDs, uses those links as strong matching evidence, and associates resolved records with a golden record through XREF. The golden-record ID view also exposes the Raisers Edge constituent ID for each active golden record.
+One caveat: The system can match a person to their Raisers Edge constituent ID and show that ID alongside their golden record. But the procedures that should save or send those ID links are currently empty, so that part still needs to be built.
+
+These three procedure files appear to be empty stubs—they contain only the procedure declaration and an empty body:
+
+[SP_XREF_CAPTURE_RE_ID()](/C:/NAS%20CODE/MDM_DB/GOLD/Procedures/SP_XREF_CAPTURE_RE_ID(VARCHAR, VARCHAR).sql)
+[SP_XREF_CAPTURE()](/C:/NAS%20CODE/MDM_DB/GOLD/Procedures/SP_XREF_CAPTURE(VARCHAR, VARCHAR, VARCHAR).sql)
+[SP_XREF_CAPTURE_D365_ID()](/C:/NAS%20CODE/MDM_DB/GOLD/Procedures/SP_XREF_CAPTURE_D365_ID(VARCHAR, VARCHAR, VARCHAR).sql))))
+	3-8	TR
+
+ 
+ 
+
+	Requirement	Comments	Additional Work (Days)	Status
+	Data Staging	Proof staging has taken place: 
+SELECT
+    SOURCE_SYSTEM,
+    COUNT(*) AS TOTAL_RECORDS,
+    COUNT_IF(_IS_ACTIVE) AS ACTIVE_RECORDS,
+    MAX(_STANDARDISED_AT) AS LAST_STAGED_AT
+FROM MDM_DB.STAGING.STANDARDISED_RECORDS
+GROUP BY SOURCE_SYSTEM
+ORDER BY SOURCE_SYSTEM;
+
+
+SELECT COUNT(*) AS ACTIVE_DYNAMICS_RECORDS,
+       MAX(_STANDARDISED_AT) AS LAST_STAGED_AT
+FROM MDM_DB.STAGING.STANDARDISED_RECORDS
+WHERE SOURCE_SYSTEM = 'DYNAMICS'
+  AND _IS_ACTIVE = TRUE;	0	 
+
+ 
+Dynamic Migration Estimate
+
+Estimates are in person-days and assume the existing Snowflake-to-Dynamics mappings and ADF framework are available to build on. Work is limited to the agreed Dynamics entities. Additional entities, such as donations or events, require separate scoping.
+Work item 	Scope 	Estimate 
+Review Dynamics field mappings and close gaps 	Review the existing mapping documentation and Snowflake views. Confirm each field’s Dynamics destination, transformations, and handling of missing or unclear values. Identify fields that still depend on Raisers Edge, and agree on a replacement source or removal before Raisers Edge is retired. 	3–8 days 
+Test ADF loads to Dynamics and resolve defects 	Run test loads and verify that records arrive in the correct Dynamics Contact or Account records with expected values. Investigate and retest failed or incorrect loads. Includes limited troubleshooting of connection issues observed so far; significant ADF or environment remediation may require additional effort. 	3–5 days 
+Support ten test/UAT loads 	Prepare or check data, monitor each load, reconcile Snowflake records against Dynamics, investigate rejected or missing records, and support agreed reruns. 	5–10 days 
+Prepare for and support production cutover 	Support one production cutover, including execution checks and post-load reconciliation. Assumes testing has passed and the cutover plan and responsibilities are agreed in advance. 	2–4 days 
+Core estimate 		13–27 person-days 
+Conditional or separately scoped work
+Work item 	Scope 	Estimate 
+HubSpot refresh/reload and validation, if required 	Confirm HubSpot data is current and usable for the Dynamics migration; refresh or reload and validate it if needed. 	1–3 days 
+Complete Dynamics-to-Snowflake ingestion, if required 	Build or finish the inbound ADF flow so Dynamics data continues to reach Snowflake after Raisers Edge is retired. This is separate from sending Snowflake data to Dynamics. 	5–10 days 
+Verify Stage/ODS and ongoing-use model requirements 	Confirm the existing Snowflake Stage/ODS setup and determine what changes, if any, are required for downstream ongoing-use models. The Dynamics ODS appears to exist; building or remediating these components is not included in the core estimate. 	To be scoped if gaps are found 
+The core estimate excludes significant ADF infrastructure or connection remediation, new mappings for additional Dynamics entities, and unconfirmed Stage/ODS or ongoing-use model changes. Any such work should be assessed and agreed before being added to the delivery scope.
+
+
+Example of Using Workbook Raisers/Snowflake Mapping?????
+
+ 
+ 
+
+SELECT * FROM RAW.RAISERS_EDGE.STG_T_constituent;
+
+The STG_T files are being truncated at 04:00 – it all of them are being loaded from SQL. 
+ 
+ 
+--- Blow id the space for tne next talk, as yet not done. 

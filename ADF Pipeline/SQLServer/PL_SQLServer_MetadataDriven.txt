@@ -1,0 +1,809 @@
+
+This pipeline is essentially the SQL Server equivalent of your D365 extract pipeline.
+
+If I had to summarise it in one sentence:
+
+It uses metadata stored in Snowflake to extract data from Raiser's Edge SQL Server tables into Azure Blob Storage, supporting both full and incremental loads with watermarks, retry protection and circuit-breaker logic.
+
+What It Does
+
+Unlike PL_SQLServer_ExtractTablesMetadata (which extracts metadata about tables),
+
+this pipeline extracts the actual business data.
+
+Examples:
+
+CONSTITUENT
+ADDRESS
+PHONE
+EMAIL
+GIFTS
+EVENTS
+CAMPAIGNS
+
+
+from Raiser's Edge SQL Server.
+
+High-Level Flow
+Snowflake Metadata
+        |
+        v
+
+Determine Which Tables
+Need Extraction
+
+        |
+        v
+
+Read Current Watermarks
+
+        |
+        v
+
+Extract Data
+From SQL Server
+
+        |
+        v
+
+Store Avro Files
+In Azure Blob
+
+        |
+        v
+
+Update Watermarks
+
+Step-by-Step
+1. Read Metadata Configuration
+LKP_GetConfig
+
+
+Reads from:
+
+AUDIT_DB.CONFIG.PIPELINE_METADATA
+AUDIT_DB.CONFIG.PIPELINE_WATERMARK
+
+
+For each configured entity it retrieves:
+
+Source Table
+Source Query
+Load Type
+Delta Column
+Watermark
+Staging Path
+
+
+Example metadata row:
+
+ENTITY_ID      = CONSTITUENT
+SOURCE_TABLE   = dbo.CONSTITUENT
+LOAD_TYPE      = INCREMENTAL
+DELTA_COLUMN   = DATE_CHANGED
+
+2. Circuit Breaker
+FLT_CircuitBreaker
+
+
+Removes entities with:
+
+CONSECUTIVE_FAILURES >= 5
+
+
+Why?
+
+To stop:
+
+Broken table
+Missing permissions
+Bad SQL
+Corrupt object
+
+
+from failing forever.
+
+3. Parallel Processing
+FE_ProcessEntities
+
+
+Processes:
+
+up to 5 entities simultaneously
+
+
+Example:
+
+CONSTITUENT
+ADDRESS
+PHONE
+EMAIL
+GIFTS
+
+
+all running together.
+
+4. Mark Running
+
+Updates:
+
+PIPELINE_WATERMARK
+
+
+with:
+
+RUNNING
+RunId
+Previous Watermark
+
+5. Extract Data
+
+This is the clever bit.
+
+The SQL generated depends on the metadata.
+
+Option A - Custom Query
+
+If:
+
+SOURCE_QUERY exists
+
+
+it uses:
+
+SELECT ...
+FROM ...
+JOIN ...
+WHERE ...
+
+
+whatever has been configured.
+
+Option B - Full Load
+
+If:
+
+LOAD_TYPE = FULL
+
+
+it generates:
+
+SELECT *
+FROM dbo.CONSTITUENT
+
+Option C - Incremental Load
+
+If:
+
+LOAD_TYPE = INCREMENTAL
+
+
+and the current watermark is:
+
+2026-11-01 18:00
+
+
+it generates:
+
+SELECT *
+FROM dbo.CONSTITUENT
+WHERE DATE_CHANGED >
+      '2026-11-01 18:00'
+
+
+Only changed rows are extracted.
+
+6. Write To Blob
+
+Instead of JSON:
+
+D365 Extract -> JSON.GZ
+
+
+this pipeline writes:
+
+Avro
+
+
+Example:
+
+raisers-edge/
+202611/
+20261108/
+14/
+constituent_20261108_141500.avro
+
+7. Update Watermark
+
+For Incremental Loads
+
+It executes:
+
+SELECT MAX(DATE_CHANGED)
+FROM dbo.CONSTITUENT
+
+
+and stores:
+
+MAX_WATERMARK
+
+
+in:
+
+PIPELINE_WATERMARK
+
+
+so next run starts from there.
+
+8. Failure Handling
+
+If extraction fails:
+
+Watermark Reverted
+Failure Count Increased
+Error Saved
+
+
+Exactly like the D365 extract pipeline.
+
+Notepad Diagram
++------------------------------------------------+
+| PL_SQLServer_MetadataDriven                    |
++------------------------------------------------+
+
+                 |
+                 v
+
++----------------------------------+
+| Read Metadata From Snowflake     |
+| PIPELINE_METADATA                |
+| PIPELINE_WATERMARK               |
++----------------------------------+
+
+                 |
+                 v
+
++----------------------------------+
+| Circuit Breaker                  |
+| Skip Failure Count >= 5          |
++----------------------------------+
+
+                 |
+                 v
+
++----------------------------------+
+| ForEach Entity                   |
+| Parallel (5 at once)             |
++----------------------------------+
+
+                 |
+                 v
+
++----------------------------------+
+| Mark RUNNING                     |
++----------------------------------+
+
+                 |
+                 v
+
++---------------------------------------+
+| Determine Extraction Method           |
++---------------------------------------+
+
+      |
+      +---------------------------+
+      |                           |
+      v                           v
+
+Custom Query                Metadata Driven
+
+                                |
+                    +-----------+----------+
+                    |                      |
+                    v                      v
+
+                FULL                 INCREMENTAL
+
+                    |                      |
+
+      SELECT *                 SELECT *
+      FROM TABLE               FROM TABLE
+                               WHERE
+                               DELTA_COL >
+                               Watermark
+
+                    |                      |
+                    +-----------+----------+
+                                |
+                                v
+
++---------------------------------------+
+| Extract SQL Server Data               |
+| Raiser's Edge                         |
++---------------------------------------+
+
+                 |
+                 v
+
++---------------------------------------+
+| Write AVRO Files                      |
+| Azure Blob Storage                    |
++---------------------------------------+
+
+                 |
+                 v
+
+         Incremental?
+
+                 |
+         +-------+-------+
+         |               |
+         | Yes           | No
+         |               |
+         v               v
+
++----------------+   +----------------+
+| Get MAX(delta) |   | Mark Success   |
+|                |   |                |
++----------------+   +----------------+
+
+         |
+         v
+
++----------------------------------+
+| Update Watermark                |
++----------------------------------+
+
+         |
+         v
+
+      COMPLETED
+
+Architecture
+                 +------------------+
+                 | Snowflake        |
+                 | Metadata Repo    |
+                 +---------+--------+
+                           |
+                           |
+                           v
+
+               PL_SQLServer_MetadataDriven
+
+                           |
+                           |
+                           v
+
+                +------------------+
+                | Raisers Edge     |
+                | SQL Server       |
+                +--------+---------+
+                         |
+                         |
+                         v
+
+                +------------------+
+                | Azure Blob       |
+                | AVRO Files       |
+                +------------------+
+
+Why I Think It Exists
+
+Looking at all the pipelines you've shown, I think the overall NAS architecture is:
+
+Raiser's Edge
+      |
+      v
+SQLServer_MetadataDriven
+      |
+      v
+Azure Blob (Raw Landing)
+      |
+      v
+Snowflake
+      |
+      v
+Business Rules
+Matching
+Deduplication
+Golden Records
+      |
+      v
+VW_D365_REQUESTS
+      |
+      v
+D365_Writeback
+      |
+      v
+Dynamics 365
+
+
+In other words:
+
+Pipeline 1
+PL_SQLServer_MetadataDriven
+
+
+Gets data out of Raiser's Edge.
+
+Pipeline 2
+Snowflake Transformation Layer
+
+
+Cleans and maps the data.
+
+Pipeline 3
+PL_D365_Writeback
+
+
+Pushes the cleansed records into Dynamics 365.
+
+That's why this pipeline looks so similar to the D365 extract pipeline. They were probably built from the same metadata-driven framework, one for SQL Server sources and one for Dataverse sources.
+
+
+-----------------------------
+
+{
+    "name": "PL_SQLServer_MetadataDriven",
+    "properties": {
+        "activities": [
+            {
+                "name": "LKP_GetConfig",
+                "description": "Reads pipeline configuration and current watermark state from Snowflake metadata tables for all enabled entities matching the pipeline parameters.",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "SnowflakeV2Source",
+                        "query": {
+                            "value": "SELECT\n    m.PIPELINE_ID,\n    m.SOURCE_INSTANCE,\n    m.ENTITY_ID,\n    m.SOURCE_TYPE,\n    m.SOURCE_TABLE,\n    m.SOURCE_QUERY,\n    m.DELTA_COLUMN,\n    m.LOAD_TYPE,\n    m.STAGING_PATH,\n    m.ENABLED,\n    COALESCE(w.WATERMARK_VALUE, '') AS WATERMARK_VALUE,\n    COALESCE(w.LAST_RUN_STATUS, 'NEW') AS STATUS,\n    COALESCE(w.CONSECUTIVE_FAILURES, 0) AS CONSECUTIVE_FAILURES,\n    COALESCE(w.LAST_RUN_ROWS, 0) AS ROWS_EXTRACTED\nFROM AUDIT_DB.CONFIG.PIPELINE_METADATA m\nLEFT JOIN AUDIT_DB.CONFIG.PIPELINE_WATERMARK w\n    ON m.PIPELINE_ID = w.PIPELINE_ID\n    AND m.SOURCE_INSTANCE = w.SOURCE_INSTANCE\n    AND m.ENTITY_ID = w.ENTITY_ID\nWHERE m.PIPELINE_ID = '@{pipeline().parameters.PipelineId}'\n    AND m.SOURCE_INSTANCE = '@{pipeline().parameters.SourceInstance}'\n    AND m.SOURCE_TYPE = '@{pipeline().parameters.SourceType}'\n    AND m.ENABLED = TRUE",
+                            "type": "Expression"
+                        },
+                        "exportSettings": {
+                            "type": "SnowflakeExportCopyCommand"
+                        }
+                    },
+                    "dataset": {
+                        "referenceName": "DS_Snowflake_Metadata",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "FLT_CircuitBreaker",
+                "description": "Excludes any entities whose consecutive failure count has reached or exceeded the CircuitBreakerThreshold parameter, preventing runaway retries on persistently failing sources.",
+                "type": "Filter",
+                "dependsOn": [
+                    {
+                        "activity": "LKP_GetConfig",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('LKP_GetConfig').output.value",
+                        "type": "Expression"
+                    },
+                    "condition": {
+                        "value": "@or(empty(item().CONSECUTIVE_FAILURES), less(int(item().CONSECUTIVE_FAILURES), pipeline().parameters.CircuitBreakerThreshold))",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "FE_ProcessEntities",
+                "description": "Iterates over each entity that passed the circuit-breaker filter, processing up to 5 in parallel.",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "FLT_CircuitBreaker",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('FLT_CircuitBreaker').output.Value",
+                        "type": "Expression"
+                    },
+                    "isSequential": false,
+                    "batchCount": 5,
+                    "activities": [
+                        {
+                            "name": "SCR_MarkRunning",
+                            "description": "Upserts the watermark record for this entity to RUNNING status and saves the current run ID, creating the row if it does not yet exist.",
+                            "type": "Script",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "linkedServiceName": {
+                                "referenceName": "LS_Snowflake",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "MERGE INTO AUDIT_DB.CONFIG.PIPELINE_WATERMARK AS tgt\nUSING (SELECT '@{item().PIPELINE_ID}' AS PIPELINE_ID, '@{item().SOURCE_INSTANCE}' AS SOURCE_INSTANCE, '@{item().ENTITY_ID}' AS ENTITY_ID) AS src\n    ON tgt.PIPELINE_ID = src.PIPELINE_ID AND tgt.SOURCE_INSTANCE = src.SOURCE_INSTANCE AND tgt.ENTITY_ID = src.ENTITY_ID\nWHEN MATCHED THEN UPDATE SET\n    PREVIOUS_WATERMARK = tgt.WATERMARK_VALUE,\n    LAST_RUN_STATUS = 'RUNNING',\n    LAST_RUN_ID = '@{pipeline().RunId}',\n    MODIFIED = CURRENT_TIMESTAMP()\nWHEN NOT MATCHED THEN INSERT (\n    PIPELINE_ID, SOURCE_INSTANCE, ENTITY_ID, WATERMARK_VALUE, PREVIOUS_WATERMARK,\n    LAST_RUN_STATUS, CONSECUTIVE_FAILURES, LAST_RUN_ROWS, LAST_RUN_ID,\n    CREATED, MODIFIED\n) VALUES (\n    '@{item().PIPELINE_ID}', '@{item().SOURCE_INSTANCE}', '@{item().ENTITY_ID}', NULL, NULL,\n    'RUNNING', 0, 0, '@{pipeline().RunId}',\n    CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP()\n);",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "02:00:00"
+                            }
+                        },
+                        {
+                            "name": "CPY_ExtractToBlob",
+                            "description": "Extracts data from the SQL Server source using either a custom query, a full-table SELECT, or a watermark-filtered incremental SELECT, and writes the result to Azure Blob Storage in Avro format.",
+                            "type": "Copy",
+                            "dependsOn": [
+                                {
+                                    "activity": "SCR_MarkRunning",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.02:00:00",
+                                "retry": 1,
+                                "retryIntervalInSeconds": 60,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "source": {
+                                    "type": "SqlServerSource",
+                                    "sqlReaderQuery": {
+                                        "value": "@if(not(empty(item().SOURCE_QUERY)),\n    item().SOURCE_QUERY,\n    if(or(equals(item().LOAD_TYPE, 'FULL'), empty(item().WATERMARK_VALUE)),\n        concat('SELECT * FROM ', item().SOURCE_TABLE),\n        concat('SELECT * FROM ', item().SOURCE_TABLE, ' WHERE ', item().DELTA_COLUMN, ' > ''', item().WATERMARK_VALUE, '''')\n    )\n)",
+                                        "type": "Expression"
+                                    },
+                                    "queryTimeout": "02:00:00",
+                                    "partitionOption": "None"
+                                },
+                                "sink": {
+                                    "type": "AvroSink",
+                                    "storeSettings": {
+                                        "type": "AzureBlobStorageWriteSettings"
+                                    },
+                                    "formatSettings": {
+                                        "type": "AvroWriteSettings",
+                                        "recordName": "Extract",
+                                        "recordNamespace": "com.nas.ingestion"
+                                    }
+                                },
+                                "enableStaging": false
+                            },
+                            "inputs": [
+                                {
+                                    "referenceName": "DS_SqlServer_RaisersEdge",
+                                    "type": "DatasetReference"
+                                }
+                            ],
+                            "outputs": [
+                                {
+                                    "referenceName": "DS_Blob_Staging_Avro",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "FolderPath": {
+                                            "value": "@concat(toLower(replace(item().PIPELINE_ID, '_', '-')), '/', formatDateTime(utcNow(), 'yyyyMM'), '/', formatDateTime(utcNow(), 'yyyyMMdd'), '/', formatDateTime(utcNow(), 'HH'))",
+                                            "type": "Expression"
+                                        },
+                                        "FileName": {
+                                            "value": "@toLower(concat(item().ENTITY_ID, '_', formatDateTime(utcNow(), 'yyyyMMdd_HHmmss'), '.avro'))",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "name": "IF_IsIncremental",
+                            "description": "Branches on whether the entity uses incremental load with a delta column. True path updates the watermark to the new max value; false path marks success without changing the watermark.",
+                            "type": "IfCondition",
+                            "dependsOn": [
+                                {
+                                    "activity": "CPY_ExtractToBlob",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "userProperties": [],
+                            "typeProperties": {
+                                "expression": {
+                                    "value": "@and(equals(item().LOAD_TYPE, 'INCREMENTAL'), not(empty(item().DELTA_COLUMN)))",
+                                    "type": "Expression"
+                                },
+                                "ifFalseActivities": [
+                                    {
+                                        "name": "SCR_MarkSuccessFull",
+                                        "description": "Updates the watermark record to SUCCESS, records the row count, and resets CONSECUTIVE_FAILURES to 0 (watermark value is not updated for full loads).",
+                                        "type": "Script",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "LS_Snowflake",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "NonQuery",
+                                                    "text": {
+                                                        "value": "UPDATE AUDIT_DB.CONFIG.PIPELINE_WATERMARK\nSET LAST_RUN_STATUS = 'SUCCESS',\n    LAST_RUN_ROWS = @{activity('CPY_ExtractToBlob').output.rowsCopied},\n    CONSECUTIVE_FAILURES = 0,\n    LAST_RUN_ID = '@{pipeline().RunId}',\n    MODIFIED = CURRENT_TIMESTAMP()\nWHERE PIPELINE_ID = '@{item().PIPELINE_ID}'\n    AND SOURCE_INSTANCE = '@{item().SOURCE_INSTANCE}'\n    AND ENTITY_ID = '@{item().ENTITY_ID}';",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    }
+                                ],
+                                "ifTrueActivities": [
+                                    {
+                                        "name": "LKP_GetMaxWatermark",
+                                        "description": "Queries the source SQL Server table for the current maximum value of the delta column to use as the new watermark after a successful incremental extract.",
+                                        "type": "Lookup",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "timeout": "0.00:10:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "source": {
+                                                "type": "SqlServerSource",
+                                                "sqlReaderQuery": {
+                                                    "value": "@concat('SELECT MAX(', item().DELTA_COLUMN, ') AS MAX_WATERMARK FROM ', item().SOURCE_TABLE)",
+                                                    "type": "Expression"
+                                                },
+                                                "queryTimeout": "00:30:00",
+                                                "partitionOption": "None"
+                                            },
+                                            "dataset": {
+                                                "referenceName": "DS_SqlServer_RaisersEdge",
+                                                "type": "DatasetReference"
+                                            },
+                                            "firstRowOnly": true
+                                        }
+                                    },
+                                    {
+                                        "name": "SCR_MarkSuccessIncremental",
+                                        "description": "Updates the watermark record to SUCCESS, advances WATERMARK_VALUE to the new max, records the row count, and resets CONSECUTIVE_FAILURES to 0.",
+                                        "type": "Script",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "LKP_GetMaxWatermark",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "LS_Snowflake",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "NonQuery",
+                                                    "text": {
+                                                        "value": "UPDATE AUDIT_DB.CONFIG.PIPELINE_WATERMARK\nSET LAST_RUN_STATUS = 'SUCCESS',\n    WATERMARK_VALUE = '@{activity('LKP_GetMaxWatermark').output.firstRow.MAX_WATERMARK}',\n    LAST_RUN_ROWS = @{activity('CPY_ExtractToBlob').output.rowsCopied},\n    CONSECUTIVE_FAILURES = 0,\n    LAST_RUN_ID = '@{pipeline().RunId}',\n    MODIFIED = CURRENT_TIMESTAMP()\nWHERE PIPELINE_ID = '@{item().PIPELINE_ID}'\n    AND SOURCE_INSTANCE = '@{item().SOURCE_INSTANCE}'\n    AND ENTITY_ID = '@{item().ENTITY_ID}';",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "name": "SCR_MarkFailed",
+                            "description": "Updates the watermark record to FAILED, rolls WATERMARK_VALUE back to the previous value, increments CONSECUTIVE_FAILURES, and stores the error message.",
+                            "type": "Script",
+                            "dependsOn": [
+                                {
+                                    "activity": "CPY_ExtractToBlob",
+                                    "dependencyConditions": [
+                                        "Failed"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "linkedServiceName": {
+                                "referenceName": "LS_Snowflake",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "UPDATE AUDIT_DB.CONFIG.PIPELINE_WATERMARK\nSET LAST_RUN_STATUS = 'FAILED',\n    WATERMARK_VALUE = PREVIOUS_WATERMARK,\n    CONSECUTIVE_FAILURES = CONSECUTIVE_FAILURES + 1,\n    LAST_ERROR_MESSAGE = LEFT(REPLACE('@{activity('CPY_ExtractToBlob').output.errors[0].Message}', '''', ''''''), 4000),\n    LAST_RUN_ID = '@{pipeline().RunId}',\n    MODIFIED = CURRENT_TIMESTAMP()\nWHERE PIPELINE_ID = '@{item().PIPELINE_ID}'\n    AND SOURCE_INSTANCE = '@{item().SOURCE_INSTANCE}'\n    AND ENTITY_ID = '@{item().ENTITY_ID}';",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "02:00:00"
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "parameters": {
+            "PipelineId": {
+                "type": "string",
+                "defaultValue": "RAISERS_EDGE"
+            },
+            "SourceInstance": {
+                "type": "string",
+                "defaultValue": "ONPREM_PROD"
+            },
+            "SourceType": {
+                "type": "string",
+                "defaultValue": "SQLSERVER"
+            },
+            "CircuitBreakerThreshold": {
+                "type": "int",
+                "defaultValue": 5
+            }
+        },
+        "folder": {
+            "name": "SQLServer"
+        },
+        "annotations": [],
+        "lastPublishTime": "2026-06-10T14:08:13Z"
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}

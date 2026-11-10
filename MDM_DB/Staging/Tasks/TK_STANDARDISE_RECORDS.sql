@@ -1,0 +1,4 @@
+create or replace task MDM_DB.STAGING.TK_STANDARDISE_RECORDS
+	warehouse=WH_NAS_MDM_DEV
+	schedule='USING CRON 0 6 * * * UTC'
+	as CALL MDM_DB.STAGING.SP_STANDARDISE_RECORDS();

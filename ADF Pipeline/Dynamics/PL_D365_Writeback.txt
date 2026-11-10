@@ -1,0 +1,696 @@
+
+/****************************
+Raiser's Edge
+      ↓
+Snowflake
+      ↓
+MDM Processing
+      ↓
+VW_D365_CONTACT
+VW_D365_ACCOUNT
+      ↓
+VW_D365_REQUESTS
+      ↓
+→ PL_D365_Writeback
+      ↓
+Dynamics 365
+******************************/ 
+
+
+{
+    "name": "PL_D365_Writeback",
+    "properties": {
+        "description": "Metadata-driven D365 (Dataverse) API writeback orchestrator. Reads pending POST/PATCH requests from INTEGRATION_DB.DYNAMICS.VW_D365_REQUESTS via PL_D365_DispatchRequests and processes CONTACT then ACCOUNT sequentially. Authenticates to Dataverse via the factory managed identity (Application User in D365), so no OAuth token fetch step is required. Applies a circuit breaker and updates AUDIT_DB.CONFIG.PIPELINE_WATERMARK on every run. concurrency: 1 so two overlapping runs can't both see the same rows as pending -- pending-ness is derived from AUDIT_DB.MONITORING.D365_WRITEBACK_STATE, which is only updated after each response.",
+        "activities": [
+            {
+                "name": "LKP_GetConfig",
+                "description": "Reads pipeline configuration and current watermark state. Left-joins the watermark so CONSECUTIVE_FAILURES defaults to 0 on first run.",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "SnowflakeV2Source",
+                        "query": {
+                            "value": "SELECT\n    m.PIPELINE_ID,\n    m.SOURCE_INSTANCE,\n    m.ENTITY_ID,\n    COALESCE(w.CONSECUTIVE_FAILURES, 0) AS CONSECUTIVE_FAILURES\nFROM AUDIT_DB.CONFIG.PIPELINE_METADATA m\nLEFT JOIN AUDIT_DB.CONFIG.PIPELINE_WATERMARK w\n    ON m.PIPELINE_ID = w.PIPELINE_ID\n    AND m.SOURCE_INSTANCE = w.SOURCE_INSTANCE\n    AND m.ENTITY_ID = w.ENTITY_ID\nWHERE m.PIPELINE_ID = '@{pipeline().parameters.PipelineId}'\n    AND m.SOURCE_INSTANCE = '@{pipeline().parameters.SourceInstance}'\n    AND m.ENABLED = TRUE",
+                            "type": "Expression"
+                        },
+                        "exportSettings": {
+                            "type": "SnowflakeExportCopyCommand"
+                        }
+                    },
+                    "dataset": {
+                        "referenceName": "DS_Snowflake_Metadata",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "FLT_CircuitBreaker",
+                "description": "Excludes any entity whose consecutive failure count has reached the CircuitBreakerThreshold, preventing runaway calls to the Dataverse Web API on a persistently failing pipeline.",
+                "type": "Filter",
+                "dependsOn": [
+                    {
+                        "activity": "LKP_GetConfig",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('LKP_GetConfig').output.value",
+                        "type": "Expression"
+                    },
+                    "condition": {
+                        "value": "@or(empty(item().CONSECUTIVE_FAILURES), less(int(item().CONSECUTIVE_FAILURES), pipeline().parameters.CircuitBreakerThreshold))",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "FE_ProcessEntities",
+                "description": "Iterates sequentially over each entity that passed the circuit-breaker filter (CONTACT then ACCOUNT). Each iteration processes all pending API requests for that entity via PL_D365_DispatchRequests.",
+                "type": "ForEach",
+                "state": "Active",
+                "onInactiveMarkAs": "Succeeded",
+                "dependsOn": [
+                    {
+                        "activity": "FLT_CircuitBreaker",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('FLT_CircuitBreaker').output.Value",
+                        "type": "Expression"
+                    },
+                    "isSequential": true,
+                    "activities": [
+                        {
+                            "name": "SCR_MarkRunning",
+                            "description": "Upserts the watermark record for this entity to RUNNING status and records the run ID, creating the row if it does not yet exist.",
+                            "type": "Script",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "linkedServiceName": {
+                                "referenceName": "LS_Snowflake",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "MERGE INTO AUDIT_DB.CONFIG.PIPELINE_WATERMARK AS tgt\nUSING (SELECT '@{item().PIPELINE_ID}' AS PIPELINE_ID, '@{item().SOURCE_INSTANCE}' AS SOURCE_INSTANCE, '@{item().ENTITY_ID}' AS ENTITY_ID) AS src\n    ON tgt.PIPELINE_ID = src.PIPELINE_ID AND tgt.SOURCE_INSTANCE = src.SOURCE_INSTANCE AND tgt.ENTITY_ID = src.ENTITY_ID\nWHEN MATCHED THEN UPDATE SET\n    PREVIOUS_WATERMARK = tgt.WATERMARK_VALUE,\n    LAST_RUN_STATUS = 'RUNNING',\n    LAST_RUN_START = CURRENT_TIMESTAMP(),\n    LAST_RUN_ID = '@{pipeline().RunId}',\n    MODIFIED = CURRENT_TIMESTAMP()\nWHEN NOT MATCHED THEN INSERT (\n    PIPELINE_ID, SOURCE_INSTANCE, ENTITY_ID, WATERMARK_VALUE, PREVIOUS_WATERMARK,\n    LAST_RUN_STATUS, CONSECUTIVE_FAILURES, LAST_RUN_ROWS, LAST_RUN_START, LAST_RUN_ID,\n    CREATED, MODIFIED\n) VALUES (\n    '@{item().PIPELINE_ID}', '@{item().SOURCE_INSTANCE}', '@{item().ENTITY_ID}', NULL, NULL,\n    'RUNNING', 0, 0, CURRENT_TIMESTAMP(), '@{pipeline().RunId}',\n    CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP()\n);",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "02:00:00"
+                            }
+                        },
+                        {
+                            "name": "EP_DispatchRequests",
+                            "description": "Calls PL_D365_DispatchRequests to fetch and send all pending API requests for this entity. Waits for completion so SCR_MarkSuccess or SCR_MarkFailed can act on the outcome. No AccessToken is passed -- the child pipeline authenticates via managed identity.",
+                            "type": "ExecutePipeline",
+                            "dependsOn": [
+                                {
+                                    "activity": "SCR_MarkRunning",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "secureInput": true
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "pipeline": {
+                                    "referenceName": "PL_D365_DispatchRequests",
+                                    "type": "PipelineReference"
+                                },
+                                "waitOnCompletion": true,
+                                "parameters": {
+                                    "PipelineId": {
+                                        "value": "@item().PIPELINE_ID",
+                                        "type": "Expression"
+                                    },
+                                    "SourceInstance": {
+                                        "value": "@item().SOURCE_INSTANCE",
+                                        "type": "Expression"
+                                    },
+                                    "EntityId": {
+                                        "value": "@item().ENTITY_ID",
+                                        "type": "Expression"
+                                    },
+                                    "TestRowsPerCombo": {
+                                        "value": "@pipeline().parameters.TestRowsPerCombo",
+                                        "type": "Expression"
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "SCR_MarkSuccess",
+                            "description": "Updates the watermark to SUCCESS, records the request count, and resets CONSECUTIVE_FAILURES to 0.",
+                            "type": "Script",
+                            "dependsOn": [
+                                {
+                                    "activity": "EP_DispatchRequests",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "linkedServiceName": {
+                                "referenceName": "LS_Snowflake",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "UPDATE AUDIT_DB.CONFIG.PIPELINE_WATERMARK\nSET LAST_RUN_STATUS = 'SUCCESS',\n    LAST_RUN_ROWS = @{activity('EP_DispatchRequests').output.pipelineReturnValue.rowsDispatched},\n    LAST_RUN_END = CURRENT_TIMESTAMP(),\n    CONSECUTIVE_FAILURES = 0,\n    LAST_ERROR_MESSAGE = NULL,\n    LAST_RUN_ID = '@{pipeline().RunId}',\n    MODIFIED = CURRENT_TIMESTAMP()\nWHERE PIPELINE_ID = '@{item().PIPELINE_ID}'\n    AND SOURCE_INSTANCE = '@{item().SOURCE_INSTANCE}'\n    AND ENTITY_ID = '@{item().ENTITY_ID}';",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "02:00:00"
+                            }
+                        },
+                        {
+                            "name": "SCR_MarkFailed",
+                            "description": "Upserts the watermark to FAILED and increments CONSECUTIVE_FAILURES. Triggers when EP_DispatchRequests fails or is skipped (propagated from SCR_MarkRunning failure). Use the LAST_RUN_ID to correlate with ADF Monitor logs.",
+                            "type": "Script",
+                            "dependsOn": [
+                                {
+                                    "activity": "EP_DispatchRequests",
+                                    "dependencyConditions": [
+                                        "Failed",
+                                        "Skipped"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "linkedServiceName": {
+                                "referenceName": "LS_Snowflake",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "MERGE INTO AUDIT_DB.CONFIG.PIPELINE_WATERMARK AS tgt\nUSING (SELECT '@{item().PIPELINE_ID}' AS PIPELINE_ID, '@{item().SOURCE_INSTANCE}' AS SOURCE_INSTANCE, '@{item().ENTITY_ID}' AS ENTITY_ID) AS src\n    ON tgt.PIPELINE_ID = src.PIPELINE_ID AND tgt.SOURCE_INSTANCE = src.SOURCE_INSTANCE AND tgt.ENTITY_ID = src.ENTITY_ID\nWHEN MATCHED THEN UPDATE SET\n    LAST_RUN_STATUS = 'FAILED',\n    LAST_RUN_END = CURRENT_TIMESTAMP(),\n    CONSECUTIVE_FAILURES = CONSECUTIVE_FAILURES + 1,\n    LAST_ERROR_MESSAGE = LEFT('Run @{pipeline().RunId} failed. Check ADF Monitor for activity-level error details.', 4000),\n    LAST_RUN_ID = '@{pipeline().RunId}',\n    MODIFIED = CURRENT_TIMESTAMP()\nWHEN NOT MATCHED THEN INSERT (\n    PIPELINE_ID, SOURCE_INSTANCE, ENTITY_ID, WATERMARK_VALUE, PREVIOUS_WATERMARK,\n    LAST_RUN_STATUS, CONSECUTIVE_FAILURES, LAST_RUN_ROWS, LAST_RUN_END,\n    LAST_ERROR_MESSAGE, LAST_RUN_ID, CREATED, MODIFIED\n) VALUES (\n    '@{item().PIPELINE_ID}', '@{item().SOURCE_INSTANCE}', '@{item().ENTITY_ID}', NULL, NULL,\n    'FAILED', 1, 0, CURRENT_TIMESTAMP(),\n    LEFT('Run @{pipeline().RunId} failed. Check ADF Monitor for activity-level error details.', 4000),\n    '@{pipeline().RunId}', CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP()\n);",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "02:00:00"
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "concurrency": 1,
+        "parameters": {
+            "PipelineId": {
+                "type": "string",
+                "defaultValue": "D365_WRITEBACK"
+            },
+            "SourceInstance": {
+                "type": "string",
+                "defaultValue": "SNOWFLAKE_DEV"
+            },
+            "CircuitBreakerThreshold": {
+                "type": "int",
+                "defaultValue": 5
+            },
+            "TestRowsPerCombo": {
+                "type": "int",
+                "defaultValue": 0
+            }
+        },
+        "folder": {
+            "name": "Dynamics"
+        },
+        "annotations": [],
+        "lastPublishTime": "2026-10-27T09:59:10Z"
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}
+
+
+-----------------------------
+
+High-Level Narrative
+
+This pipeline is effectively the reverse of the extract pipeline.
+
+The first pipeline did:
+
+D365  --> Blob --> Snowflake
+
+
+This pipeline does:!!!!
+
+Snowflake --> D365
+
+
+Its purpose is to take records that have been prepared inside Snowflake and send them back to Dataverse (Dynamics 365) using the D365 Web API.
+
+Think of it as a writeback/orchestration pipeline.
+
+It does not build the requests itself. Instead it:
+
+Reads configuration from Snowflake.
+Applies a circuit breaker.
+Processes entities (CONTACT, ACCOUNT, etc.).
+Calls a child pipeline (PL_D365_DispatchRequests).
+The child pipeline sends POST/PATCH requests to D365.
+Records success/failure statistics.
+Maintains state in the watermark table.
+What I Think The Business Process Is
+
+A likely scenario:
+
+Dynamics 365
+      |
+      v
+Extract
+      |
+      v
+Snowflake
+      |
+      v
+Data cleansing / matching / migration
+      |
+      v
+Rows requiring update
+      |
+      v
+VW_D365_REQUESTS
+      |
+      v
+PL_D365_Writeback
+      |
+      v
+Dynamics 365
+
+
+Example:
+
+A migration team updates customer data.
+
+Customer email corrected
+Missing phone number added
+Address standardised
+Duplicate contacts merged
+
+
+The changes are stored in Snowflake.
+
+The writeback process then pushes those updates back into D365.
+
+What the Pipeline Does
+Step 1 - Read Configuration
+LKP_GetConfig
+
+
+Reads:
+
+AUDIT_DB.CONFIG.PIPELINE_METADATA
+AUDIT_DB.CONFIG.PIPELINE_WATERMARK
+
+
+Obtains:
+
+Pipeline
+Entity
+Failure Counts
+
+
+For example:
+
+CONTACT
+ACCOUNT
+
+Step 2 - Circuit Breaker
+FLT_CircuitBreaker
+
+
+If:
+
+CONSECUTIVE_FAILURES >= 5
+
+
+that entity is skipped.
+
+Purpose:
+
+Avoid continuously posting bad requests
+Avoid hammering Dataverse
+Protect API limits
+
+Step 3 - Process Each Entity
+FE_ProcessEntities
+
+
+Runs sequentially:
+
+CONTACT
+then
+ACCOUNT
+
+
+Notice:
+
+"isSequential": true
+
+
+This is deliberate.
+
+You often load:
+
+CONTACTS first
+ACCOUNTS second
+
+
+or vice versa depending on dependencies.
+
+The designer clearly wanted predictable ordering.
+
+Step 4 - Mark Entity As Running
+
+Updates:
+
+AUDIT_DB.CONFIG.PIPELINE_WATERMARK
+
+
+Sets:
+
+STATUS = RUNNING
+START_TIME
+RUN_ID
+
+
+This provides monitoring and auditing.
+
+Step 5 - Call Child Pipeline
+PL_D365_DispatchRequests
+
+
+This is where the actual work happens.
+
+The description says:
+
+Reads pending POST/PATCH requests
+from VW_D365_REQUESTS
+
+
+Meaning Snowflake already contains prepared API requests.
+
+Something like:
+
+REQUEST_ID
+ENTITY
+METHOD
+PAYLOAD
+
+
+Example:
+
+{
+   "firstname": "John",
+   "lastname": "Smith"
+}
+
+
+and
+
+PATCH CONTACT 12345
+
+
+or
+
+POST ACCOUNT
+
+
+The child pipeline sends them to Dataverse.
+
+Step 6 - Success
+
+If everything completes:
+
+SCR_MarkSuccess
+
+
+Updates watermark table:
+
+STATUS = SUCCESS
+FAILURES = 0
+ROWS = requests sent
+
+Step 7 - Failure
+
+If writeback fails:
+
+SCR_MarkFailed
+
+
+Updates:
+
+STATUS = FAILED
+FAILURES += 1
+ERROR MESSAGE
+RUN ID
+
+
+Eventually the circuit breaker stops processing that entity.
+
+Notepad Flow Diagram
++------------------------------------------------+
+| PL_D365_Writeback                              |
+| Snowflake --> Dynamics 365 Writeback Pipeline  |
++------------------------------------------------+
+
+                  |
+                  v
+
++----------------------------------+
+| Read Configuration              |
+| PIPELINE_METADATA               |
+| PIPELINE_WATERMARK              |
++----------------------------------+
+
+                  |
+                  v
+
++----------------------------------+
+| Circuit Breaker                 |
+| Skip entities with             |
+| failures >= threshold (5)      |
++----------------------------------+
+
+                  |
+                  v
+
++----------------------------------+
+| ForEach Entity                  |
+| Sequential Processing           |
++----------------------------------+
+
+                  |
+                  v
+
++----------------------------------+
+| Mark Entity RUNNING             |
++----------------------------------+
+
+                  |
+                  v
+
++-----------------------------------------+
+| Execute Child Pipeline                  |
+| PL_D365_DispatchRequests                |
++-----------------------------------------+
+
+                  |
+                  v
+
++-----------------------------------------+
+| Read Pending Requests                   |
+| VW_D365_REQUESTS                        |
++-----------------------------------------+
+
+                  |
+                  v
+
++-----------------------------------------+
+| Send API Requests To D365              |
+|                                         |
+| POST = Create Record                   |
+| PATCH = Update Record                  |
++-----------------------------------------+
+
+                  |
+          +-------+--------+
+          |                |
+          | Success        | Failure
+          |                |
+          v                v
+
++----------------+  +----------------+
+| Mark SUCCESS   |  | Mark FAILED    |
+|                |  |                |
+| Reset Failures |  | Failures + 1   |
+| Store Count    |  | Store Error    |
++----------------+  +----------------+
+
+          |                |
+          +-------+--------+
+                  |
+                  v
+
+             COMPLETED
+
+Conceptual Architecture
+                  +------------------+
+                  | Snowflake        |
+                  |                  |
+                  | Source Data      |
+                  | Business Rules   |
+                  | Transforms       |
+                  +--------+---------+
+                           |
+                           |
+                           v
+
+                +----------------------+
+                | VW_D365_REQUESTS     |
+                |                      |
+                | Pending API Calls    |
+                +----------+-----------+
+                           |
+                           |
+                           v
+
+                +----------------------+
+                | PL_D365_Writeback    |
+                +----------+-----------+
+                           |
+                           |
+                           v
+
+                +----------------------+
+                | Dataverse / D365     |
+                | Web API              |
+                +----------------------+
+
+Why I Think It Was Designed This Way
+✅ Decouples Data Processing From API Calls
+
+Business logic happens inside Snowflake:
+
+Matching
+Deduplication
+Validation
+Transformations
+
+
+Only the final API requests are sent to D365.
+
+✅ Provides Guaranteed Auditability
+
+Every request goes through:
+
+VW_D365_REQUESTS
+
+
+and every run is recorded in:
+
+PIPELINE_WATERMARK
+
+
+You can answer:
+
+What was sent?
+When?
+How many?
+Did it succeed?
+
+✅ Protects Dataverse
+
+The circuit breaker prevents:
+
+Bad payloads
+Missing references
+Configuration errors
+
+
+from hammering the D365 API indefinitely.
+
+✅ Supports Large Migrations
+
+This looks very much like a migration or integration design.
+
+Typical flow:
+
+Legacy System
+      |
+      v
+Snowflake Staging
+      |
+      v
+Transformation
+      |
+      v
+Generate D365 Requests
+      |
+      v
+PL_D365_Writeback
+      |
+      v
+Dynamics 365
+
+One-line Summary
+
+PL_D365_Writeback is a metadata-driven Azure Data Factory orchestration pipeline that reads pending create/update requests prepared in Snowflake, sends them to Dynamics 365 via the Dataverse Web API, and records success, failure, and circuit-breaker state in Snowflake for controlled, auditable writeback processing.

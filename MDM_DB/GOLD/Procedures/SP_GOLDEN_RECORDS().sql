@@ -1,0 +1,203 @@
+CREATE OR REPLACE PROCEDURE MDM_DB.GOLD.SP_GOLDEN_RECORDS()
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS '
+BEGIN
+    LET rows_golden      INT := 0;
+    LET rows_deactivated INT := 0;
+    LET rows_xref        INT := 0;
+    LET rows_backfill    INT := 0;
+    MERGE INTO MDM_DB.GOLD.GOLDEN_RECORDS tgt
+    USING (
+        WITH matched_survivors AS (
+            SELECT
+                mc.MATCH_GROUP_ID,
+                sr.STANDARDISED_ID, sr.FULL_NAME, sr.FIRST_NAME, sr.LAST_NAME,
+                sr.ADDRESS_LINE1, sr.CITY, sr.POSTCODE, sr.COUNTRY, sr.COUNTRY_ISO2,
+                sr.LAST_UPDATED,
+                mg.MATCH_SCORE AS CONFIDENCE_SCORE
+            FROM MDM_DB.MDM.MATCH_GROUP_MEMBERS mgm
+            INNER JOIN MDM_DB.STAGING.MATCH_COMPONENTS mc
+                ON mgm.MATCH_GROUP_ID = mc.MATCH_GROUP_ID AND mgm.STANDARDISED_ID = mc.STANDARDISED_ID
+            INNER JOIN MDM_DB.STAGING.STANDARDISED_RECORDS sr
+                ON mc.STANDARDISED_ID = sr.STANDARDISED_ID AND sr._IS_ACTIVE = TRUE
+            INNER JOIN MDM_DB.MDM.MATCH_GROUPS mg ON mc.MATCH_GROUP_ID = mg.MATCH_GROUP_ID
+            WHERE mgm.IS_SURVIVING_RECORD = TRUE
+        ),
+        singletons AS (
+            SELECT
+                ''SG-'' || sr.STANDARDISED_ID AS MATCH_GROUP_ID,
+                sr.STANDARDISED_ID, sr.FULL_NAME, sr.FIRST_NAME, sr.LAST_NAME,
+                sr.ADDRESS_LINE1, sr.CITY, sr.POSTCODE, sr.COUNTRY, sr.COUNTRY_ISO2,
+                sr.LAST_UPDATED, 100.0 AS CONFIDENCE_SCORE
+            FROM MDM_DB.STAGING.STANDARDISED_RECORDS sr
+            WHERE sr._IS_ACTIVE = TRUE
+                AND sr.STANDARDISED_ID NOT IN (SELECT STANDARDISED_ID FROM MDM_DB.STAGING.MATCH_COMPONENTS)
+        ),
+        all_survivors AS (SELECT * FROM matched_survivors UNION ALL SELECT * FROM singletons),
+        matched_source_systems AS (
+            SELECT mgm.MATCH_GROUP_ID,
+                ARRAY_UNIQUE_AGG(sr.SOURCE_SYSTEM) AS SOURCE_SYSTEMS,
+                COUNT(*) AS SOURCE_RECORD_COUNT
+            FROM MDM_DB.MDM.MATCH_GROUP_MEMBERS mgm
+            INNER JOIN MDM_DB.STAGING.STANDARDISED_RECORDS sr
+                ON mgm.STANDARDISED_ID = sr.STANDARDISED_ID AND sr._IS_ACTIVE = TRUE
+            GROUP BY mgm.MATCH_GROUP_ID
+        ),
+        best_email AS (
+            SELECT r.STANDARDISED_ID, e.VALUE:EMAIL::VARCHAR AS EMAIL,
+                ROW_NUMBER() OVER (PARTITION BY r.STANDARDISED_ID ORDER BY e.VALUE:IS_PRIMARY::BOOLEAN DESC NULLS LAST, e.INDEX) AS RN
+            FROM MDM_DB.STAGING.STANDARDISED_RECORDS r,
+                LATERAL FLATTEN(INPUT => r.ALL_EMAILS) e
+            WHERE r._IS_ACTIVE = TRUE AND e.VALUE:EMAIL::VARCHAR IS NOT NULL
+        ),
+        best_phone AS (
+            SELECT r.STANDARDISED_ID, p.VALUE:PHONE::VARCHAR AS PHONE,
+                ROW_NUMBER() OVER (PARTITION BY r.STANDARDISED_ID ORDER BY p.VALUE:IS_PRIMARY::NUMBER DESC NULLS LAST, p.INDEX) AS RN
+            FROM MDM_DB.STAGING.STANDARDISED_RECORDS r,
+                LATERAL FLATTEN(INPUT => r.ALL_PHONES) p
+            WHERE r._IS_ACTIVE = TRUE AND p.VALUE:PHONE::VARCHAR IS NOT NULL
+        ),
+        singleton_source AS (
+            SELECT STANDARDISED_ID, SOURCE_SYSTEM
+            FROM MDM_DB.STAGING.STANDARDISED_RECORDS
+            WHERE _IS_ACTIVE = TRUE
+        ),
+        all_group_emails AS (
+            SELECT mc.MATCH_GROUP_ID, ARRAY_UNIQUE_AGG(e.VALUE) AS ALL_EMAILS
+            FROM MDM_DB.STAGING.MATCH_COMPONENTS mc
+            INNER JOIN MDM_DB.STAGING.STANDARDISED_RECORDS sr
+                ON mc.STANDARDISED_ID = sr.STANDARDISED_ID AND sr._IS_ACTIVE = TRUE,
+                LATERAL FLATTEN(INPUT => sr.ALL_EMAILS, OUTER => TRUE) e
+            WHERE sr.ALL_EMAILS IS NOT NULL
+            GROUP BY mc.MATCH_GROUP_ID
+        ),
+        all_group_phones AS (
+            SELECT mc.MATCH_GROUP_ID, ARRAY_UNIQUE_AGG(p.VALUE) AS ALL_PHONES
+            FROM MDM_DB.STAGING.MATCH_COMPONENTS mc
+            INNER JOIN MDM_DB.STAGING.STANDARDISED_RECORDS sr
+                ON mc.STANDARDISED_ID = sr.STANDARDISED_ID AND sr._IS_ACTIVE = TRUE,
+                LATERAL FLATTEN(INPUT => sr.ALL_PHONES, OUTER => TRUE) p
+            WHERE sr.ALL_PHONES IS NOT NULL
+            GROUP BY mc.MATCH_GROUP_ID
+        ),
+        all_group_addresses AS (
+            SELECT mc.MATCH_GROUP_ID, ARRAY_UNIQUE_AGG(a.VALUE) AS ALL_ADDRESSES
+            FROM MDM_DB.STAGING.MATCH_COMPONENTS mc
+            INNER JOIN MDM_DB.STAGING.STANDARDISED_RECORDS sr
+                ON mc.STANDARDISED_ID = sr.STANDARDISED_ID AND sr._IS_ACTIVE = TRUE,
+                LATERAL FLATTEN(INPUT => sr.ALL_ADDRESSES, OUTER => TRUE) a
+            WHERE sr.ALL_ADDRESSES IS NOT NULL
+            GROUP BY mc.MATCH_GROUP_ID
+        )
+        SELECT
+            ''GR-'' || s.MATCH_GROUP_ID                                           AS GOLDEN_RECORD_ID,
+            ''CONTACT''                                                            AS DOMAIN,
+            s.FULL_NAME, s.FIRST_NAME, s.LAST_NAME,
+            em.EMAIL, ph.PHONE,
+            s.ADDRESS_LINE1, s.CITY, s.POSTCODE, s.COUNTRY, s.COUNTRY_ISO2,
+            COALESCE(age.ALL_EMAILS, surv_sr.ALL_EMAILS)                         AS ALL_EMAILS,
+            COALESCE(agp.ALL_PHONES, surv_sr.ALL_PHONES)                         AS ALL_PHONES,
+            COALESCE(aga.ALL_ADDRESSES, surv_sr.ALL_ADDRESSES)                   AS ALL_ADDRESSES,
+            COALESCE(mss.SOURCE_SYSTEMS, ARRAY_CONSTRUCT(ss.SOURCE_SYSTEM))      AS SOURCE_SYSTEMS,
+            COALESCE(mss.SOURCE_RECORD_COUNT, 1)                                 AS SOURCE_RECORD_COUNT,
+            s.CONFIDENCE_SCORE,
+            s.MATCH_GROUP_ID,
+            s.LAST_UPDATED
+        FROM all_survivors s
+        LEFT JOIN best_email em ON s.STANDARDISED_ID = em.STANDARDISED_ID AND em.RN = 1
+        LEFT JOIN best_phone ph ON s.STANDARDISED_ID = ph.STANDARDISED_ID AND ph.RN = 1
+        LEFT JOIN matched_source_systems mss ON s.MATCH_GROUP_ID = mss.MATCH_GROUP_ID
+        LEFT JOIN singleton_source ss ON s.STANDARDISED_ID = ss.STANDARDISED_ID AND mss.MATCH_GROUP_ID IS NULL
+        LEFT JOIN all_group_emails age ON s.MATCH_GROUP_ID = age.MATCH_GROUP_ID
+        LEFT JOIN all_group_phones agp ON s.MATCH_GROUP_ID = agp.MATCH_GROUP_ID
+        LEFT JOIN all_group_addresses aga ON s.MATCH_GROUP_ID = aga.MATCH_GROUP_ID
+        LEFT JOIN MDM_DB.STAGING.STANDARDISED_RECORDS surv_sr
+            ON s.STANDARDISED_ID = surv_sr.STANDARDISED_ID AND surv_sr._IS_ACTIVE = TRUE AND age.MATCH_GROUP_ID IS NULL
+    ) src
+    ON tgt.GOLDEN_RECORD_ID = src.GOLDEN_RECORD_ID
+    WHEN MATCHED AND tgt.IS_MANUALLY_EDITED = FALSE THEN UPDATE SET
+        tgt.FULL_NAME           = src.FULL_NAME,
+        tgt.FIRST_NAME          = src.FIRST_NAME,
+        tgt.LAST_NAME           = src.LAST_NAME,
+        tgt.EMAIL               = src.EMAIL,
+        tgt.PHONE               = src.PHONE,
+        tgt.ADDRESS_LINE1       = src.ADDRESS_LINE1,
+        tgt.CITY                = src.CITY,
+        tgt.POSTCODE            = src.POSTCODE,
+        tgt.COUNTRY             = src.COUNTRY,
+        tgt.COUNTRY_ISO2        = src.COUNTRY_ISO2,
+        tgt.ALL_EMAILS          = src.ALL_EMAILS,
+        tgt.ALL_PHONES          = src.ALL_PHONES,
+        tgt.ALL_ADDRESSES       = src.ALL_ADDRESSES,
+        tgt.SOURCE_SYSTEMS      = src.SOURCE_SYSTEMS,
+        tgt.SOURCE_RECORD_COUNT = src.SOURCE_RECORD_COUNT,
+        tgt.CONFIDENCE_SCORE    = src.CONFIDENCE_SCORE,
+        tgt.MATCH_GROUP_ID      = src.MATCH_GROUP_ID,
+        tgt.LAST_UPDATED        = CURRENT_TIMESTAMP(),
+        tgt._IS_ACTIVE          = TRUE
+    WHEN NOT MATCHED THEN INSERT (
+        GOLDEN_RECORD_ID, DOMAIN, FULL_NAME, FIRST_NAME, LAST_NAME, EMAIL, PHONE,
+        ADDRESS_LINE1, CITY, POSTCODE, COUNTRY, COUNTRY_ISO2,
+        ALL_EMAILS, ALL_PHONES, ALL_ADDRESSES,
+        SOURCE_SYSTEMS, SOURCE_RECORD_COUNT, CONFIDENCE_SCORE, MATCH_GROUP_ID,
+        CREATED_AT, LAST_UPDATED, _IS_ACTIVE
+    ) VALUES (
+        src.GOLDEN_RECORD_ID, src.DOMAIN, src.FULL_NAME, src.FIRST_NAME, src.LAST_NAME, src.EMAIL, src.PHONE,
+        src.ADDRESS_LINE1, src.CITY, src.POSTCODE, src.COUNTRY, src.COUNTRY_ISO2,
+        src.ALL_EMAILS, src.ALL_PHONES, src.ALL_ADDRESSES,
+        src.SOURCE_SYSTEMS, src.SOURCE_RECORD_COUNT, src.CONFIDENCE_SCORE, src.MATCH_GROUP_ID,
+        CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), TRUE
+    );
+    rows_golden := SQLROWCOUNT;
+
+    UPDATE MDM_DB.GOLD.GOLDEN_RECORDS
+    SET _IS_ACTIVE = FALSE, LAST_UPDATED = CURRENT_TIMESTAMP()
+    WHERE _IS_ACTIVE = TRUE AND IS_MANUALLY_EDITED = FALSE
+        AND MATCH_GROUP_ID NOT IN (
+            SELECT MATCH_GROUP_ID FROM MDM_DB.MDM.MATCH_GROUPS
+            UNION ALL
+            SELECT ''SG-'' || STANDARDISED_ID FROM MDM_DB.STAGING.STANDARDISED_RECORDS WHERE _IS_ACTIVE = TRUE
+        );
+    rows_deactivated := SQLROWCOUNT;
+
+    MERGE INTO MDM_DB.GOLD.XREF tgt
+    USING (
+        SELECT gr.GOLDEN_RECORD_ID, sr.SOURCE_SYSTEM, sr.SOURCE_RECORD_ID, sr.STANDARDISED_ID
+        FROM MDM_DB.GOLD.GOLDEN_RECORDS gr
+        INNER JOIN MDM_DB.STAGING.MATCH_COMPONENTS mc ON gr.MATCH_GROUP_ID = mc.MATCH_GROUP_ID
+        INNER JOIN MDM_DB.STAGING.STANDARDISED_RECORDS sr
+            ON mc.STANDARDISED_ID = sr.STANDARDISED_ID AND sr._IS_ACTIVE = TRUE
+        WHERE gr._IS_ACTIVE = TRUE
+        UNION ALL
+        SELECT gr.GOLDEN_RECORD_ID, sr.SOURCE_SYSTEM, sr.SOURCE_RECORD_ID, sr.STANDARDISED_ID
+        FROM MDM_DB.GOLD.GOLDEN_RECORDS gr
+        INNER JOIN MDM_DB.STAGING.STANDARDISED_RECORDS sr
+            ON gr.MATCH_GROUP_ID = ''SG-'' || sr.STANDARDISED_ID AND sr._IS_ACTIVE = TRUE
+        WHERE gr._IS_ACTIVE = TRUE AND gr.MATCH_GROUP_ID LIKE ''SG-%''
+    ) src
+    ON tgt.GOLDEN_RECORD_ID = src.GOLDEN_RECORD_ID
+        AND tgt.SOURCE_SYSTEM = src.SOURCE_SYSTEM
+        AND tgt.SOURCE_RECORD_ID = src.SOURCE_RECORD_ID
+    WHEN MATCHED THEN UPDATE SET
+        tgt.STANDARDISED_ID = src.STANDARDISED_ID,
+        tgt.LINKED_AT       = CURRENT_TIMESTAMP()
+    WHEN NOT MATCHED THEN INSERT (
+        GOLDEN_RECORD_ID, SOURCE_SYSTEM, SOURCE_RECORD_ID, STANDARDISED_ID, LINKED_AT, LINKED_BY
+    ) VALUES (
+        src.GOLDEN_RECORD_ID, src.SOURCE_SYSTEM, src.SOURCE_RECORD_ID, src.STANDARDISED_ID, CURRENT_TIMESTAMP(), ''SYSTEM''
+    );
+    rows_xref := SQLROWCOUNT;
+
+    UPDATE MDM_DB.STAGING.STANDARDISED_RECORDS sr
+    SET sr.GOLDEN_RECORD_ID = xr.GOLDEN_RECORD_ID
+    FROM MDM_DB.GOLD.XREF xr
+    WHERE sr.SOURCE_SYSTEM = xr.SOURCE_SYSTEM
+        AND sr.SOURCE_RECORD_ID = xr.SOURCE_RECORD_ID
+        AND sr._IS_ACTIVE = TRUE;
+    rows_backfill := SQLROWCOUNT;
+
+    RETURN ''Golden records complete. Golden: '' || rows_golden || '', Deactivated: '' || rows_deactivated || '', XREF: '' || rows_xref || '', Backfill: '' || rows_backfill;
+END;
+';

@@ -1,0 +1,81 @@
+create or replace view INTEGRATION_DB.DYNAMICS.VW_D365_MHA_RELATIONSHIPTYPE(
+	RE_CONSTITUENT_TYPE,
+	D365_ID,
+	LOAD_ACTION,
+	HOLD_REASON,
+	PAYLOAD,
+	MHA_NAME
+) as
+-- One D365 relationship type per distinct RE constituent type description,
+-- ignoring case and padding. The most frequent RE spelling is used. Retired
+-- types (names that start with z) are included. A type already in D365
+-- (matched by name, ignoring case) is EXISTS and keeps its D365 id. Where D365
+-- holds two rows of one name, the oldest wins. Types are reference data, so
+-- GDPR does not apply.
+WITH RE_TYPES AS (
+    SELECT TRIM(CONSTITUENTTYPEDESCRIPTION) AS RE_CONSTITUENT_TYPE
+    FROM RAW.RAISERS_EDGE.VW_ODS_T_CONSTITUENTTYPES
+    WHERE NULLIF(TRIM(CONSTITUENTTYPEDESCRIPTION), '') IS NOT NULL
+    GROUP BY TRIM(CONSTITUENTTYPEDESCRIPTION)
+    QUALIFY
+        ROW_NUMBER() OVER (
+            PARTITION BY UPPER(TRIM(CONSTITUENTTYPEDESCRIPTION))
+            ORDER BY COUNT(*) DESC, TRIM(CONSTITUENTTYPEDESCRIPTION)
+        ) = 1
+),
+
+D365_TYPES AS (
+    SELECT
+        UPPER(TRIM(MHA_NAME)) AS NAME_KEY,
+        MHA_RELATIONSHIPTYPEID
+    FROM RAW.DYNAMICS.VW_ODS_MHA_RELATIONSHIPTYPES
+    WHERE NULLIF(TRIM(MHA_NAME), '') IS NOT NULL
+    QUALIFY
+        ROW_NUMBER() OVER (
+            PARTITION BY UPPER(TRIM(MHA_NAME))
+            ORDER BY CREATEDON, MHA_RELATIONSHIPTYPEID
+        ) = 1
+),
+
+-- Open gates that cover the whole table
+GATES AS (
+    SELECT
+        -- LISTAGG gives an empty string, not NULL, when no gate is open
+        NULLIF(
+            LISTAGG(GATE_CODE, ',') WITHIN GROUP (ORDER BY GATE_CODE), ''
+        ) AS GATE_CODES
+    FROM INTEGRATION_DB.DYNAMICS.VW_D365_REF_LOAD_GATE
+    WHERE
+        D365_TABLE = 'mha_relationshiptype'
+        AND IS_OPEN
+        AND ROW_CONDITION_KEY IS NULL
+),
+
+RESOLVED AS (
+    SELECT
+        R.RE_CONSTITUENT_TYPE,
+        T.MHA_RELATIONSHIPTYPEID AS D365_ID,
+        G.GATE_CODES,
+        R.RE_CONSTITUENT_TYPE AS MHA_NAME
+    FROM RE_TYPES AS R
+    LEFT JOIN D365_TYPES AS T
+        ON UPPER(TRIM(R.RE_CONSTITUENT_TYPE)) = T.NAME_KEY
+    CROSS JOIN GATES AS G
+)
+
+SELECT
+    RE_CONSTITUENT_TYPE,
+    D365_ID,
+    CASE
+        WHEN D365_ID IS NOT NULL THEN 'EXISTS'
+        WHEN GATE_CODES IS NOT NULL THEN 'HOLD'
+        ELSE 'CREATE'
+    END AS LOAD_ACTION,
+    IFF(
+        D365_ID IS NULL AND GATE_CODES IS NOT NULL,
+        'GATE:' || GATE_CODES,
+        NULL
+    ) AS HOLD_REASON,
+    OBJECT_CONSTRUCT('mha_name', MHA_NAME) AS PAYLOAD,
+    MHA_NAME
+FROM RESOLVED;

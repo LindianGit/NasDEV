@@ -1,0 +1,115 @@
+but I'm only, you know, just under an hour's drive away from central London. Okay, are you south or north or? West of London. West, okay. 
+
+I'm in Arizona in the United States and so I just wanted to talk to you about, you know, kind of what we're looking to do here and with with PathWord as well as, you know, talk to you a little bit about what you're looking for, some of your experience and from that perspective. So we're a mid-sized bank and we work, we're not like a retail bank, but we work with different partners to issue primarily prepaid cards. We do partnership consumer lending as well as commercial lending and we work with a lot of FinTechs and a variety of other partners. 
+
+Stripe is one of our partners, pretty well known. We've got quite a few others and so we've been working, you know, these last five years to build out this new data warehouse, be able to have, you know, trusted data, bring all that data together. We've done a good job of getting to, you know, most of that data there and now we're starting to kind of connect that data to the downstream systems to be able to get rid of the old legacy data feeds and data processes. 
+
+And so what we're looking at now is how do we kind of get that system and make sure it's kind of production ready, you know, the high level of availability and performance and all of those things to have everyone be able to use it and that volume of data. And so I'm building out, we're building out a new team that's going to focus on kind of that platform engineering of it. We have a platform architecture team that's been doing this work and then the individual teams kind of take up pieces of it and do it when they can, but we want to get an effort and a few key kind of areas around that is, you know, number one is data observability. 
+
+So having better visibility to track the data coming through, how well it's flowing, the setup of it to make it, you know, restartability of the data, you know, when there's errors or issues, how that workflows to handle it, all of those different pieces and no matter, like Snowflake is our database, we've got some Matillion, we've got some Calend, some, you know, tasks, different things like that set up. And so bring all of that together into a single view and make sure that it's ready to be supported and try to minimise the amount of support that's necessary for it. So I think that's one big piece of it. 
+
+Certainly AI enablement is another big piece, right? So we have a separate AI team, obviously AI is a huge thing in the industry and everywhere, and so there's a huge focus on how do we make this data available, not only for the human users, but for AI usage. And so looking at, you know, the semantic models, looking at MCP servers, how do we kind of structure things and set things up to make that successful. Things like, you know, kind of more self-service, rolling that out, as well as we've got some needs, you know, obviously performance, cost management in Snowflake, how do we address that, and, you know, any other pieces to kind of help to make the platform more robust, useable capabilities, data qualities, another big focus area. 
+
+So anyway, that's kind of where, you know, what we're looking for this team to do. And so, you know, so just kind of laying that out. So tell me a little bit about yourself, what you've been working on, all of that.
+
+Okay, okay. I'm Lyndian Thomas, as you know. I'm a Snowpro core certified Snowflake data engineer with over 15 years experience within mostly financial services, but also other areas. 
+
+My last role, I worked as an analytical engineer stroke data engineer on Snowflake. There, I designed a new data warehouse to enable historical tracking of stock. The company I work with was a used cars dealership, a major used car dealership in the UK. 
+
+I changed, before they had like an OLTP type data warehouse that gave transaction data of their stock, whereas I set up an OLAP data warehouse and enabled the management to look at the stock on a historical level. So I set up a dimensional modelling facts table, fact and dimension tables. And on top of that, I put a semantic layer on top of the data warehouse that I set up in the form of Power BI. 
+
+So management could just go in and use the visuals and slice up the data or query the data in so many different ways. Before that, and I think where maybe it's a little bit more relevant to this role is that I worked for Samsung as a data engineer. Well, I went in there as a data engineer, but the role morphed really into a data architect in the sense that I set up Samsung's first and only to my knowledge, Snowflake data platform. 
+
+I set that up from scratch. I put in all the standardised practises that Samsung require of new data in terms of security, in terms of monitoring the logins, going back to security again, I put in network policies to make sure that people, unauthorised people from outside couldn't get into the system. And once that was signed off and met Samsung's internal regulations, we started building a data cleanroom application, a data sharing application with a couple of large companies here in the UK called Sainsbury's and Argos, household names.
+
+Once that was signed off and in production and signed off and running, Samsung asked me to stay on to teach their non-IT people how to use Snowflake and how to maintain the data cleanroom that I'd actually set up. So that was me in Samsung. It went well, I enjoyed it. 
+
+And that's one of the reasons why I'm attracted to this job, because it's basically setting up, from what I understand, a platform and enhancing that platform. It's work I enjoy. Previous to that, I worked in mostly, as I mentioned before, in financial services.
+
+I've worked for JP Morgan Asset Management. I've worked for MSM Link here in the city of London in Lloyds Insurance. And I've worked for many years as a contractor for the major Dutch bank ING, or as we pronounce it, ING, in the Netherlands. 
+
+And there I was involved with these companies from everything, from the system development, lifecycle, the whole thing, cash reporting, financial reporting, setting up new products. And the actual work that I feel most proud of is setting up a brand new product, literally from a piece of paper at ING, an annuity life insurance product, from a piece of paper to when I put it into production, when I left the company, was handling over 300 million euros in single premiums. And I actually won a prize for that. 
+
+And so that's me. And I want to stay inside Snowflake in terms of moving forward. I want to stay inside the Snowflake area. 
+
+As I said, I'm Snowpro course certified. Actually, my certification expired on the 1st of July, but I hope to take the exam either next Monday or very soon. And then after that, I want to go into just knowledge-wise into the architecture side. 
+
+And this is one of the reasons why I'm attracted to this job as well, because I think doing this job would provide a good basis for that. So over to you. So you talked about building a semantic model in your last role. 
+
+So talk about what that was and how you went about that. Basically, building a semantic model in terms of Power BI was getting entities and making various relationships between the entities and defining what opening stock was. Because one of the issues I had when I was at the big multi-role was that I was trying to get metrics to measure. 
+
+So a manager would say to me, OK, I want to see opening stock. But what is opening stock? What do you think opening stock is? So you could speak to one manager and they would tell you one definition of opening stock. And then another manager would tell you another definition of opening stock. 
+
+And it was a case of just trying to go through and just nail down the definitions of what these things were. And then incorporate those definitions into a Power BI model, because as you set up Power BI, it's a lot easier to put in a modelling process. So you have one entity looking at another entity and so on. 
+
+So that's how I did it. I basically spoke with the stakeholders to do that. Yeah. 
+
+In terms of you talked about for Samsung. So Samsung, like what division of Samsung was that? They have electronics, they've got banking, they've got, I'm sure, lots and lots of other things. It was all electronics. 
+
+All electronics were selling phones and so on. And this is one of the reasons why we set up. They wanted a data clean room application because, as you know, a data cleaning application is sharing data.
+
+Yeah. So talk about that, like your thought processes that went into, you talked about setting up the access controls, the groups around that, and the data clean room and the data sharing. And so how did you approach those pieces of it? Well, because I set up the platform to begin with, the team was small. 
+
+So it was initially was me and my manager. We both had an account admin authorisation. But later on, when we had people coming in and these are the people I trained up, I used them rollback to give them security or privileges to use the data clean room and to look at certain databases or not to look at other certain databases, gave them usage.
+
+So let's say you have a snowflake performance issue with something, right? You've got a job or a VA job. How do you go about figuring out the performance and how to solve it? Well, my first point of call would be going into the account usage database of Snowflake. Within that account, sorry, within that database, there is a view called the query history view. 
+
+And it gives you the metrics on each query run, how long it run, when it was set off, how long it ran, and so on and so on. And then you can look at that to find out, say, in your pipeline what perhaps was the problem. Once you narrow it down to a store procedure, you can look at the query profile and you can look at aspects of the query profile. 
+
+You can say, okay, am I doing a full scan of this table when I don't need to? You can look at that. If that's the case, then you can say, okay, because that table is doing a full table scan, perhaps I can introduce pruning and clustering, making use of micropartitions. So instead of reading the whole table, I only read, say, the first 5% of the table because that's where my data is. 
+
+I could look at basically SQL optimisations, like I don't want Cartesian joins, I just want to join between these two tables on unique key. I don't want a mass join. I could look maybe within Snowflake, I could look at maybe the query acceleration service. 
+
+If, for example, I do have to do a full table scan, can I delegate that job to the query acceleration service? That will do it quicker. Maybe I can look at size. There's an argument to say, okay, then if your query is running slowly, then increase the size. 
+
+I don't believe in that. To me, that's not gospel. What you need to do, you can say, okay, then, if your memory is spilling from your warehouse into your local memory, the IO is taking a lot longer and your query is going slower, perhaps maybe you can change your query to make sure that to enable, to use the multi-cluster aspect of Snowflake to delegate part of that query to different clusters. 
+
+So you could have one cluster doing maybe the full table scan, the other cluster doing other parts of the query. You could use that. And also, yeah. 
+
+So in terms of performance, you could do that. Yeah. Right. 
+
+So I talked about another part of what we're looking at is around the AI side of things. So can you talk a little bit about how you see data usage and AI and how that kind of experience that you've had with AI and things like that? Yeah. Well, my experience with AI within the Snowflake realm isn't that great.
+
+I've just started reading up on things like complete AI, whereby you give AI within Snowflake, say, a question and they'll come back with some text or is it AI SQL where you can delegate some SQL work to AI and so on. If I'm honest, well, I am honest. I don't know too much about it. 
+
+It's a subject I'm reading into, but I'm not an expert in AI in terms of Snowflake. Right. OK. 
+
+How do you stay on top of like Snowflake or other technology and data changes, new technology, the evolution? You talked about getting your certification again in Snowflake. How do you go about learning and staying on top of the industry? Basically, I go for exams. I base my learning on exams.
+
+Sometimes I watch YouTube videos to see the trends. And as you quite rightly mentioned, AI is coming increasingly more into it. For example, there's this term called COCO. 
+
+I'd never heard of that until a few days ago. I'd never heard of that. It's something I look into.
+
+And it's one of these things with all technologies, especially with Snowflake, it seems to be changing so quickly. Absolutely. Absolutely. 
+
+So, you know, Password is a U.S. based bank. We're a fully remote company, but we work kind of central time in the U.S. So do you have any issues working U.S. hours? Absolutely not. And this is one of the things that attracted me to this job when the recruiter told me that I may have to work U.S. hours. 
+
+This was great because over here in the UK, well, I suppose over there as well. Over here, we're coming into our winter time. If I work U.S. hours, it means I've got the best part of the day in the morning to do what I need to do in daylight.
+
+Then I start work. I think it's one twelve or one o'clock and then I can I can just do my work. So that's one advantage. 
+
+Plus, on top of that, I've actually done this before. If you look on my CV, I was working in Brisbane, Australia, but I was working from the Netherlands in Brisbane, Australia. So my working day would start at half five and then I had no problems with that at all.
+
+No problems. It's one of the things that attracted me to this job. Right.
+
+So that's all the questions I have for you. Do you have any questions for me? Yeah. For the lucky candidate who got this job here, what would you see as a measure of success within, say, after six months? So I think there's, you know, there's the ability to be part of the team, but work independently.
+
+Right. So be able to go off and be able to kind of drive these things forward. I think we want to see some, you know, kind of thought leadership around the approaches.
+
+So we talked about I talked about data observability. That's something that we still there's a lot of challenges with it. We put lots of little pieces together. 
+
+And so like the helping to think through how to kind of put it together and starting to deliver on it. And then especially from a snowflake side, I think starting to put in more robustness around our performance and cost management. So visibility into it. 
+
+How do we know some automated processes that are going to highlight where those issues are and be able to be proactive? So I think that's probably the biggest thing up front is that, you know, kind of proactive cost and performance management to highlight and resolve those issues. Right. Right now, it's, you know, either I go into the system and, oh, that doesn't look right.
+
+Or my architect does or something like that. We need to we need to get better at that. So that's, I think, probably one of the more robust pieces that we'd want to have in place early.
+
+That's good. That's good. I mean, I tend to think of differentiation in definition between monitoring and observability in terms of monitoring.
+
+You can see something has gone wrong, whereas observability tells you how you can actually fix it. So that's something that I appreciate. Any other questions? For now, no. 
+
+No, that was my only question. People say you should have two or three questions, but I just have the one question for that. It's been very interesting.
+
+So we're early in the process right now, but I'll reach out to Ernie, you know, as we go through and I'm sure I'll be in touch with you. But thank you for the time. Great meeting you, Indian.
+
+OK, thank you very much for giving me your time and enjoy the rest of the day. Thank you. OK, bye bye.

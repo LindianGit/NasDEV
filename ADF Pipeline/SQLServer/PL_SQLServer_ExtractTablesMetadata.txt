@@ -1,0 +1,336 @@
+{
+    "name": "PL_SQLServer_ExtractTablesMetadata",
+    "properties": {
+        "activities": [
+            {
+                "name": "Copy data1_copy1",
+                "type": "Copy",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "SqlServerSource",
+                        "sqlReaderQuery": "SELECT\n    s.name AS SchemaName,\n    t.name AS TableName,\n    kc.name AS PrimaryKeyName,\n    c.name AS ColumnName,\n    ic.key_ordinal AS KeyColumnOrder,\n    ty.name AS DataType,\n    c.max_length AS MaxLength,\n    c.is_nullable AS IsNullable\nFROM sys.tables t\nINNER JOIN sys.schemas s ON t.schema_id = s.schema_id\nINNER JOIN sys.indexes i ON t.object_id = i.object_id AND i.is_primary_key = 1\nINNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id\nINNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id\nINNER JOIN sys.key_constraints kc ON i.object_id = kc.parent_object_id AND i.index_id = kc.unique_index_id\nINNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id\nORDER BY s.name, t.name, ic.key_ordinal",
+                        "queryTimeout": "02:00:00",
+                        "partitionOption": "None"
+                    },
+                    "sink": {
+                        "type": "DelimitedTextSink",
+                        "storeSettings": {
+                            "type": "AzureBlobStorageWriteSettings"
+                        },
+                        "formatSettings": {
+                            "type": "DelimitedTextWriteSettings",
+                            "quoteAllText": true,
+                            "fileExtension": ".csv"
+                        }
+                    },
+                    "enableStaging": false,
+                    "translator": {
+                        "type": "TabularTranslator",
+                        "typeConversion": true,
+                        "typeConversionSettings": {
+                            "allowDataTruncation": true,
+                            "treatBooleanAsNumber": false
+                        }
+                    }
+                },
+                "inputs": [
+                    {
+                        "referenceName": "DS_SqlServer_RaisersEdge",
+                        "type": "DatasetReference"
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "DS_AzureBlobStorage_CSV",
+                        "type": "DatasetReference"
+                    }
+                ]
+            }
+        ],
+        "folder": {
+            "name": "SQLServer"
+        },
+        "annotations": [],
+        "lastPublishTime": "2026-06-10T14:08:13Z"
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}
+
+
+-------------------------------
+
+This pipeline is much simpler than the previous ones.
+
+Its job is not to move business data.
+
+Its job is to extract metadata about SQL Server tables and their primary keys.
+
+What It Does
+
+The pipeline runs a SQL query against SQL Server system tables:
+
+sys.tables
+sys.schemas
+sys.indexes
+sys.index_columns
+sys.columns
+sys.key_constraints
+sys.types
+
+
+and extracts information about every table that has a primary key.
+
+It retrieves:
+
+Schema Name
+Table Name
+Primary Key Name
+Primary Key Column Name
+Column Order
+Data Type
+Length
+Nullable Flag
+
+
+Then writes the results to:
+
+Azure Blob Storage
+
+
+as a CSV file.
+
+Example Output
+
+Suppose SQL Server contains:
+
+CREATE TABLE dbo.CONTACT
+(
+    CONTACT_ID INT PRIMARY KEY,
+    FIRST_NAME VARCHAR(50),
+    LAST_NAME VARCHAR(50)
+);
+
+
+The CSV may contain:
+
+SchemaName,TableName,PrimaryKeyName,ColumnName,KeyColumnOrder
+dbo,CONTACT,PK_CONTACT,CONTACT_ID,1
+
+
+For composite keys:
+
+PRIMARY KEY (ORDER_ID, LINE_NUMBER)
+
+
+you may get:
+
+dbo,ORDER_LINE,PK_ORDER_LINE,ORDER_ID,1
+dbo,ORDER_LINE,PK_ORDER_LINE,LINE_NUMBER,2
+
+Notepad Flow Diagram
++----------------------------------+
+| PL_SQLServer_ExtractTablesMetadata |
++----------------------------------+
+
+               |
+               v
+
++----------------------------------+
+| Connect To SQL Server            |
+| (RaisersEdge Database)           |
++----------------------------------+
+
+               |
+               v
+
++--------------------------------------+
+| Query SQL Server System Catalog      |
+|                                      |
+| sys.tables                           |
+| sys.schemas                          |
+| sys.columns                          |
+| sys.indexes                          |
+| sys.key_constraints                  |
+| sys.types                            |
++--------------------------------------+
+
+               |
+               v
+
++--------------------------------------+
+| Collect Table Metadata               |
+|                                      |
+| Schema                               |
+| Table                                |
+| PK Name                              |
+| PK Column                            |
+| Data Type                            |
+| Length                               |
+| Nullable                             |
++--------------------------------------+
+
+               |
+               v
+
++--------------------------------------+
+| Write CSV File To Blob Storage       |
++--------------------------------------+
+
+               |
+               v
+
+            Finished
+
+Architecture Diagram
+             +------------------+
+             | SQL Server       |
+             | Raisers Edge DB  |
+             +--------+---------+
+                      |
+                      |
+                      v
+
+         Read System Catalogue Views
+
+                      |
+                      v
+
+             +------------------+
+             | ADF Pipeline     |
+             +--------+---------+
+                      |
+                      |
+                      v
+
+             +------------------+
+             | Azure Blob       |
+             | Metadata CSV     |
+             +------------------+
+
+Why Do I Think It Exists?
+
+This is where it gets interesting.
+
+Given your NAS migration project, I'd say there are three likely reasons.
+
+1. Build Migration Mapping Documents (Most Likely)
+
+When migrating from Raiser's Edge to D365, someone needs to know:
+
+What tables exist?
+What are the primary keys?
+How do records link together?
+
+
+This extract creates a catalogue.
+
+Example:
+
+CONSTITUENT
+ADDRESS
+PHONE
+EMAIL
+GIFT
+CAMPAIGN
+
+
+and their identifying keys.
+
+Essentially:
+
+Source System Data Dictionary
+
+2. Generate Metadata-Driven Pipelines
+
+The D365 extract pipeline you showed earlier is heavily metadata-driven.
+
+A common approach is:
+
+Step 1
+Discover source tables
+
+Step 2
+Store metadata
+
+Step 3
+Generate ingestion processes automatically
+
+
+This metadata CSV might later be loaded into:
+
+PIPELINE_METADATA
+
+
+or another control framework.
+
+3. Support Data Modelling
+
+One of the first things a data modeller asks is:
+
+What uniquely identifies a record?
+
+
+Primary keys answer that.
+
+Without this information you can't easily build:
+
+Joins
+Dimensions
+Fact tables
+MERGE statements
+Deduplication logic
+
+What It Does NOT Do
+
+Unlike the D365 pipelines, it does NOT:
+
+Move customer data
+Load transactions
+Update records
+Maintain watermarks
+Track failures
+Send API requests
+
+
+It's simply extracting structural information.
+
+Think:
+
+Metadata
+
+
+rather than:
+
+Business Data
+
+If I Were Reviewing This During a Migration
+
+I'd immediately think:
+
+Raiser's Edge
+      |
+      v
+Metadata Discovery
+      |
+      v
+Understand Source Schema
+      |
+      v
+Design Mapping
+      |
+      v
+Build D365 Migration Pipelines
+
+
+So my strongest hypothesis is:
+
+This pipeline was created very early in the project to inventory the Raiser's Edge SQL Server database, identify table primary keys, and provide the information needed to design mappings, lineage, and migration processes into Dataverse/D365.

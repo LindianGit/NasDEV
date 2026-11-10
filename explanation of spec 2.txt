@@ -1,0 +1,17 @@
+Create 
+
+I've created the diagram as a text file you can open in Notepad: `SPEC_2_DIAGRAM.txt`, next to the spec. It is plain boxes and arrows with no tooling. I haven't opened it in Notepad to check the layout.
+
+It has ten sections:
+1. The big picture: Raisers Edge to Snowflake to ADF to Dynamics, with the box this spec covers marked.
+2. The hand-off contract with ADF.
+3. The two flows, Flow A (supporters) and Flow B (transactions), and the dependency between them.
+4. The data path inside Snowflake, plus the shared pieces: mapping tables, cut-off rules, load gates and checks.
+5. The load order.
+6. Where the mapping workbook stands, with a bar chart by entity.
+7. The phases.
+8. The acceptance checks.
+9. The estimate.
+10. The top risks and decisions needed from NAS.
+
+The phase section shows a "2 – 3 wks" label for Phase 0 with a footnote. That label is a guess; the spec itself only gives effort in person-days. I'd drop the weeks figure unless you want a calendar view.

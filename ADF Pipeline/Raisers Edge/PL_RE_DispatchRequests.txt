@@ -1,0 +1,943 @@
+{
+    "name": "PL_RE_DispatchRequests",
+    "properties": {
+        "description": "Child pipeline called by PL_RE_Writeback once per entity. Fetches all pending API requests for that entity from INTEGRATION_DB.RAISERS_EDGE.VW_RE_REQUESTS and dispatches them sequentially to the Blackbaud SKY API.",
+        "activities": [
+            {
+                "name": "LKP_GetRequests",
+                "description": "Fetches all pending API writeback requests for this entity from VW_RE_REQUESTS. Each row is one POST or PATCH call. ADF Lookup returns up to 5,000 rows.",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "SnowflakeV2Source",
+                        "query": {
+                            "value": "SELECT\n    pipeline_id,\n    source_instance,\n    entity_id,\n    golden_record_id,\n    constituent_id,\n    http_method,\n    request_url,\n    request_body\nFROM INTEGRATION_DB.RAISERS_EDGE.VW_RE_REQUESTS\nWHERE pipeline_id = '@{pipeline().parameters.PipelineId}'\n    AND source_instance = '@{pipeline().parameters.SourceInstance}'\n    AND entity_id = '@{pipeline().parameters.EntityId}'@{if(greater(pipeline().parameters.TestRowsPerCombo, 0), concat('\nQUALIFY ROW_NUMBER() OVER (PARTITION BY HTTP_METHOD ORDER BY GOLDEN_RECORD_ID) <= ', string(pipeline().parameters.TestRowsPerCombo)), '')}",
+                            "type": "Expression"
+                        },
+                        "exportSettings": {
+                            "type": "SnowflakeExportCopyCommand"
+                        },
+                        "treatDecimalAsString": true
+                    },
+                    "dataset": {
+                        "referenceName": "DS_Snowflake_Metadata",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "FE_ApiRequests",
+                "description": "Iterates sequentially over each pending request row. Sequential preserves the SKY API 10 req/s rate limit. Each iteration calls IF_PostOrPatch to dispatch the correct HTTP verb.",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "LKP_GetRequests",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('LKP_GetRequests').output.value",
+                        "type": "Expression"
+                    },
+                    "isSequential": false,
+                    "batchCount": 5,
+                    "activities": [
+                        {
+                            "name": "IF_PostOrPatch",
+                            "description": "Branches on HTTP_METHOD: POST to create a new constituent, PATCH to update an existing one.",
+                            "type": "IfCondition",
+                            "dependsOn": [
+                                {
+                                    "activity": "SET_AccessToken",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                },
+                                {
+                                    "activity": "SET_SubscriptionKey",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                },
+                                {
+                                    "activity": "SET_TokenCreatedDate",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "userProperties": [],
+                            "typeProperties": {
+                                "expression": {
+                                    "value": "@equals(item().HTTP_METHOD, 'POST')",
+                                    "type": "Expression"
+                                },
+                                "ifFalseActivities": [
+                                    {
+                                        "name": "WEB_Patch",
+                                        "description": "Updates an existing constituent via PATCH /constituents/{id}.",
+                                        "type": "WebActivity",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "timeout": "0.00:02:00",
+                                            "retry": 0,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "method": "PATCH",
+                                            "headers": {
+                                                "Authorization": {
+                                                    "value": "@concat('Bearer ', pipeline().parameters.AccessToken)",
+                                                    "type": "Expression"
+                                                },
+                                                "Bb-Api-Subscription-Key": {
+                                                    "value": "@pipeline().parameters.SubscriptionKey",
+                                                    "type": "Expression"
+                                                },
+                                                "Content-Type": "application/json"
+                                            },
+                                            "url": {
+                                                "value": "@{item().REQUEST_URL}",
+                                                "type": "Expression"
+                                            },
+                                            "body": {
+                                                "value": "@{item().REQUEST_BODY}",
+                                                "type": "Expression"
+                                            }
+                                        }
+                                    }
+                                ],
+                                "ifTrueActivities": [
+                                    {
+                                        "name": "WEB_Post",
+                                        "description": "Creates a new constituent via POST /constituents.",
+                                        "type": "WebActivity",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "timeout": "0.00:02:00",
+                                            "retry": 0,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "method": "POST",
+                                            "headers": {
+                                                "Authorization": {
+                                                    "value": "@concat('Bearer ', variables('accessToken'))",
+                                                    "type": "Expression"
+                                                },
+                                                "Bb-Api-Subscription-Key": {
+                                                    "value": "@variables('subscriptionKey')",
+                                                    "type": "Expression"
+                                                },
+                                                "Content-Type": "application/json"
+                                            },
+                                            "url": {
+                                                "value": "@{item().REQUEST_URL}",
+                                                "type": "Expression"
+                                            },
+                                            "body": {
+                                                "value": "@{item().REQUEST_BODY}",
+                                                "type": "Expression"
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "name": "SCR_REVERSE_KEY_SYNC",
+                                        "description": "Inserts the constituent_id and Golden record to ",
+                                        "type": "Script",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "WEB_Post",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "LS_Snowflake",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "NonQuery",
+                                                    "text": {
+                                                        "value": "INSERT INTO INTEGRATION_DB.HUBSPOT.HUBSPOT_KEY_SYNC (GOLDEN_RECORD_ID, CONSTITUENT_ID)\nVALUES ('@{item().GOLDEN_RECORD_ID}', '@{activity('WEB_Post').output.id}');",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    },
+                                    {
+                                        "name": "SCR_CAPTURE_XREF",
+                                        "description": "Writes the new RE constituent ID from the POST 201 response into MDM_DB.GOLD.XREF so subsequent cycles emit PATCH not POST.",
+                                        "type": "Script",
+                                        "state": "Inactive",
+                                        "onInactiveMarkAs": "Succeeded",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "WEB_Post",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "LS_Snowflake",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "NonQuery",
+                                                    "text": {
+                                                        "value": "CALL MDM_DB.GOLD.SP_XREF_CAPTURE_RE_ID('@{item().GOLDEN_RECORD_ID}', '@{activity('WEB_Post').output.id}');",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "name": "SET_AccessToken",
+                            "description": "Stores the access token in a pipeline variable so inner ForEach activities can reference it without re-authenticating.",
+                            "type": "SetVariable",
+                            "dependsOn": [
+                                {
+                                    "activity": "EP_GetAccessToken_Refresh",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "variableName": "accessToken",
+                                "value": {
+                                    "value": "@activity('EP_GetAccessToken_Refresh').output.pipelineReturnValue.authToken",
+                                    "type": "Expression"
+                                }
+                            }
+                        },
+                        {
+                            "name": "SET_SubscriptionKey",
+                            "description": "Stores the SKY API subscription key in a pipeline variable.",
+                            "type": "SetVariable",
+                            "dependsOn": [
+                                {
+                                    "activity": "EP_GetAccessToken_Refresh",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "variableName": "subscriptionKey",
+                                "value": {
+                                    "value": "@activity('EP_GetAccessToken_Refresh').output.pipelineReturnValue.subscriptionKey",
+                                    "type": "Expression"
+                                }
+                            }
+                        },
+                        {
+                            "name": "SET_TokenCreatedDate",
+                            "type": "SetVariable",
+                            "dependsOn": [
+                                {
+                                    "activity": "EP_GetAccessToken_Refresh",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "variableName": "tokenCreatedDate",
+                                "value": {
+                                    "value": "@activity('EP_GetAccessToken_Refresh').output.pipelineReturnValue.TokenCreatedDate",
+                                    "type": "Expression"
+                                }
+                            }
+                        },
+                        {
+                            "name": "EP_GetAccessToken_Refresh",
+                            "description": "Calls PL_RE_GetAccessToken to obtain a fresh SKY API access token. Token is valid for 60 minutes.",
+                            "type": "ExecutePipeline",
+                            "dependsOn": [],
+                            "policy": {
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "pipeline": {
+                                    "referenceName": "PL_RE_GetAccessToken",
+                                    "type": "PipelineReference"
+                                },
+                                "waitOnCompletion": true,
+                                "parameters": {
+                                    "TokenCreatedDate": {
+                                        "value": "@if(\n    empty(variables('tokenCreatedDate')),\n    pipeline().parameters.TokenCreatedDate,\n    variables('tokenCreatedDate')\n)",
+                                        "type": "Expression"
+                                    },
+                                    "ValidAuthToken": {
+                                        "value": "@if(\n    empty(variables('accessToken')),\n    pipeline().parameters.AccessToken,\n    variables('accessToken')\n)",
+                                        "type": "Expression"
+                                    },
+                                    "SubscriptionKey": {
+                                        "value": "@pipeline().parameters.SubscriptionKey",
+                                        "type": "Expression"
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "parameters": {
+            "PipelineId": {
+                "type": "string"
+            },
+            "SourceInstance": {
+                "type": "string"
+            },
+            "EntityId": {
+                "type": "string"
+            },
+            "AccessToken": {
+                "type": "string"
+            },
+            "SubscriptionKey": {
+                "type": "string"
+            },
+            "TestRowsPerCombo": {
+                "type": "int",
+                "defaultValue": 0
+            },
+            "TokenCreatedDate": {
+                "type": "string"
+            }
+        },
+        "variables": {
+            "accessToken": {
+                "type": "String"
+            },
+            "subscriptionKey": {
+                "type": "String"
+            },
+            "tokenCreatedDate": {
+                "type": "String"
+            }
+        },
+        "folder": {
+            "name": "RaisersEdge"
+        },
+        "annotations": [],
+        "lastPublishTime": "2026-10-27T09:59:09Z"
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}
+
+---------------------------------------------------------
+
+This one is a much more enterprise integration pattern than a simple ETL pipeline. It is effectively an MDM Writeback Engine that takes approved Golden Records in Snowflake and synchronises them back into Raiser's Edge.
+
+The Big Picture
+                 +----------------------+
+                 |  MDM Golden Records  |
+                 +----------+-----------+
+                            |
+                            v
+                 +----------------------+
+                 | VW_RE_REQUESTS View  |
+                 | Generates API Calls  |
+                 +----------+-----------+
+                            |
+                            v
+            +----------------------------+
+            | PL_RE_DispatchRequests     |
+            +----------------------------+
+                            |
+            +---------------+---------------+
+            |                               |
+            v                               v
+       POST Create                   PATCH Update
+            |                               |
+            +---------------+---------------+
+                            |
+                            v
+                    Raiser's Edge
+                  Blackbaud SKY API
+                            |
+                            v
+                 New Constituent IDs
+                            |
+                            v
+                Cross-Reference Tables
+                            |
+                            v
+               Future Updates use PATCH
+
+What Problem Is It Solving?
+
+Imagine the NAS MDM platform has determined:
+
+Golden Record
+-------------
+John Smith
+Address Updated
+Email Updated
+Phone Updated
+
+
+The business wants those changes pushed back into:
+
+Raiser's Edge
+
+
+This pipeline performs that outbound synchronisation.
+
+Step 1 - Read Pending Requests
+LKP_GetRequests
+
+Reads from:
+
+INTEGRATION_DB.RAISERS_EDGE.VW_RE_REQUESTS
+
+
+The best thing about this design is that ADF is not building payloads.
+
+Instead:
+
+Snowflake
+     ↓
+Generates URL
+Generates HTTP Method
+Generates JSON Body
+     ↓
+ADF executes it
+
+
+Example rows:
+
+HTTP_METHOD = POST
+REQUEST_URL = /constituents
+REQUEST_BODY = {...}
+
+
+or
+
+HTTP_METHOD = PATCH
+REQUEST_URL = /constituents/12345
+REQUEST_BODY = {...}
+
+
+ADF acts purely as an orchestration engine.
+
+That is a very clean architecture.
+
+Notepad View of the Flow
++--------------------------------------------------+
+|              VW_RE_REQUESTS                      |
++--------------------------------------------------+
+| GOLDEN_RECORD_ID | METHOD | URL | PAYLOAD        |
++--------------------------------------------------+
+| 10001            | POST   | ... | {...}          |
+| 10002            | PATCH  | ... | {...}          |
+| 10003            | PATCH  | ... | {...}          |
++--------------------------------------------------+
+
+                     |
+                     v
+
+         PL_RE_DispatchRequests
+
+                     |
+                     v
+
+           For Each Request Row
+
+                     |
+                     v
+
+           Is Method = POST ?
+
+           /                     \
+          / YES                   \ NO
+         v                         v
+
+   WEB_Post                  WEB_Patch
+
+         \                         /
+          \                       /
+           +----------+----------+
+                      |
+                      v
+
+             Blackbaud SKY API
+
+Test Mode
+
+I like this feature.
+
+QUALIFY ROW_NUMBER()
+OVER (
+PARTITION BY HTTP_METHOD
+ORDER BY GOLDEN_RECORD_ID
+)
+<= TestRowsPerCombo
+
+
+Allows:
+
+5 POSTs
+5 PATCHes
+
+
+instead of processing thousands.
+
+Very useful during UAT.
+
+Step 2 - Access Token
+EP_GetAccessToken_Refresh
+
+Calls:
+
+PL_RE_GetAccessToken
+
+
+which is the authentication pipeline you posted previously.
+
+That means:
+
+Business Pipeline
+        |
+Authentication Pipeline
+
+
+are separated.
+
+Architecturally this is good because if Blackbaud changes authentication tomorrow, only one pipeline changes.
+
+Step 3 - Store Authentication Data
+
+Three activities:
+
+SET_AccessToken
+SET_SubscriptionKey
+SET_TokenCreatedDate
+
+
+populate variables for later use.
+
+accessToken
+subscriptionKey
+tokenCreatedDate
+
+
+This avoids continuously passing parameters throughout the pipeline.
+
+Step 4 - Process Each Request
+FE_ApiRequests
+
+The description says:
+
+Sequential preserves SKY API limits
+
+
+However I spotted something important:
+
+"isSequential": false,
+"batchCount": 5
+
+
+This means:
+
+Not Sequential
+
+
+Instead:
+
+Up to 5 Requests Running Concurrently
+
+
+So either:
+
+Code is correct
+Comment is wrong
+
+
+or
+
+Comment is correct
+Code is wrong
+
+
+That should definitely be reviewed.
+
+Step 5 - Decide Between POST and PATCH
+IF_PostOrPatch
+
+Decision logic:
+
+HTTP_METHOD = POST ?
+
+Yes
+Create New Constituent
+
+
+Uses:
+
+POST
+
+No
+Update Existing Constituent
+
+
+Uses:
+
+PATCH
+
+Notepad Decision Tree
+Request
+   |
+   v
+
+HTTP_METHOD ?
+
+   |
+   +---- POST -----> Create Constituent
+   |
+   +---- PATCH ----> Update Constituent
+
+
+Simple and effective.
+
+POST Scenario
+
+Suppose MDM discovers:
+
+Mary Jones
+does not exist in Raiser's Edge
+
+
+The POST sends:
+
+POST /constituents
+
+
+with a JSON payload.
+
+Blackbaud returns:
+
+{
+    "id": "845211"
+}
+
+
+The new constituent has been created.
+
+PATCH Scenario
+
+Suppose:
+
+Mary Jones
+already exists
+
+
+but:
+
+new phone number
+
+
+was added.
+
+Then:
+
+PATCH /constituents/845211
+
+
+updates the existing record.
+
+No duplicate constituent is created.
+
+Step 6 - Reverse Key Synchronisation
+
+This is arguably the most important business step.
+
+After:
+
+POST
+
+
+returns:
+
+{
+   "id":"845211"
+}
+
+
+the pipeline captures:
+
+845211
+
+
+and stores it against:
+
+Golden Record ID
+
+Reverse Key Sync Diagram
+Before POST
+
+Golden Record
+      |
+      +----> No Raiser's Edge ID
+
+------------------------------------------------
+
+POST /constituents
+
+------------------------------------------------
+
+After POST
+
+Golden Record 10001
+      |
+      +----> RE Constituent 845211
+
+
+From now on:
+
+POST becomes PATCH
+
+
+which is exactly what you want.
+
+SCR_REVERSE_KEY_SYNC
+
+This activity writes:
+
+INSERT INTO HUBSPOT_KEY_SYNC
+(
+ GOLDEN_RECORD_ID,
+ CONSTITUENT_ID
+)
+
+
+One thing immediately caught my eye:
+
+HUBSPOT_KEY_SYNC
+
+
+inside a Raiser's Edge integration.
+
+That looks suspicious.
+
+Possibilities:
+
+1. Shared integration table
+2. Temporary table
+3. Copy/Paste oversight
+4. Legacy implementation
+
+
+I'd definitely ask about that.
+
+SCR_CAPTURE_XREF
+
+There's actually a better-looking solution:
+
+SP_XREF_CAPTURE_RE_ID
+
+
+which updates the MDM cross-reference layer.
+
+But:
+
+"state": "Inactive"
+
+
+so it's currently disabled.
+
+I suspect the team is transitioning from:
+
+HUBSPOT_KEY_SYNC
+
+
+to
+
+MDM XREF
+
+
+and hasn't finished.
+
+What I Like Architecturally
+✔ Metadata Driven
+
+Snowflake knows how to build requests.
+
+ADF only executes.
+
+Very maintainable.
+
+✔ Reusable Authentication
+
+Authentication is centralised.
+
+No duplicate OAuth logic.
+
+✔ Supports Create and Update
+POST
+PATCH
+
+
+through one framework.
+
+✔ Golden Record Based
+
+Everything revolves around:
+
+GOLDEN_RECORD_ID
+
+
+which is classic MDM design.
+
+✔ Reverse Synchronisation
+
+Capturing newly created IDs is excellent integration practice.
+
+Without this you'd keep creating duplicates.
+
+Things I Would Challenge
+1. Sequential vs Parallel
+
+The biggest issue.
+
+Description:
+
+Sequential
+
+
+Code:
+
+isSequential = false
+
+
+Those conflict.
+
+2. Secure Output
+
+Almost everything is:
+
+secureOutput = false
+
+
+including token-related activities.
+
+I'd strongly consider:
+
+secureInput = true
+secureOutput = true
+
+
+for security.
+
+3. Token Refresh Placement
+
+At first glance, the token refresh activities appear inside the request-processing branch structure.
+
+I'd check whether a token is being refreshed more often than necessary.
+
+Ideally:
+
+Get Token Once
+      |
+      v
+Process Hundreds of Requests
+
+
+rather than:
+
+Request
+ ↓
+Get Token
+ ↓
+Request
+ ↓
+Get Token
+
+Interview-Level Summary
+
+If I were explaining this to a client or architecture panel:
+
+PL_RE_DispatchRequests is an outbound MDM synchronisation
+pipeline. It reads pending REST API requests generated by a
+Snowflake metadata view, retrieves a valid Blackbaud SKY API
+access token, and dispatches POST or PATCH requests to
+Raiser's Edge. New constituent identifiers returned from
+POST operations are written back into cross-reference tables,
+allowing future synchronisation cycles to perform updates
+rather than inserts. The design separates business logic from
+orchestration, with Snowflake generating request payloads and
+ADF acting purely as the execution layer.
+
+
+Of all the pipelines you've shown so far, this is the one that most clearly demonstrates senior data engineering and MDM integration design, because it is implementing a complete end-to-end writeback framework rather than simply moving data between systems.
+
+
+

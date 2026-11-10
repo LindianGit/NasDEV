@@ -1,0 +1,934 @@
+{
+    "name": "PL_RE_Writeback",
+    "properties": {
+        "description": "Metadata-driven RE API writeback pipeline. Reads pending POST/PATCH requests from INTEGRATION_DB.RAISERS_EDGE.VW_RE_REQUESTS, obtains a fresh access token, and processes each request sequentially against the Blackbaud SKY API. Applies a circuit breaker and updates AUDIT_DB.CONFIG.PIPELINE_WATERMARK on every run. Designed to serve as the standard template for all future RE API entity writebacks.",
+        "activities": [
+            {
+                "name": "LKP_GetConfig",
+                "description": "Reads pipeline configuration and current watermark state. Left-joins the watermark so CONSECUTIVE_FAILURES defaults to 0 on first run.",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "SnowflakeV2Source",
+                        "query": {
+                            "value": "SELECT\n    m.PIPELINE_ID,\n    m.SOURCE_INSTANCE,\n    m.ENTITY_ID,\n    COALESCE(w.CONSECUTIVE_FAILURES, 0) AS CONSECUTIVE_FAILURES\nFROM AUDIT_DB.CONFIG.PIPELINE_METADATA m\nLEFT JOIN AUDIT_DB.CONFIG.PIPELINE_WATERMARK w\n    ON m.PIPELINE_ID = w.PIPELINE_ID\n    AND m.SOURCE_INSTANCE = w.SOURCE_INSTANCE\n    AND m.ENTITY_ID = w.ENTITY_ID\nWHERE m.PIPELINE_ID = '@{pipeline().parameters.PipelineId}'\n    AND m.SOURCE_INSTANCE = '@{pipeline().parameters.SourceInstance}'\n    AND m.ENABLED = TRUE",
+                            "type": "Expression"
+                        },
+                        "exportSettings": {
+                            "type": "SnowflakeExportCopyCommand"
+                        }
+                    },
+                    "dataset": {
+                        "referenceName": "DS_Snowflake_Metadata",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "FLT_CircuitBreaker",
+                "description": "Excludes any entity whose consecutive failure count has reached the CircuitBreakerThreshold, preventing runaway calls to the SKY API on a persistently failing pipeline.",
+                "type": "Filter",
+                "dependsOn": [
+                    {
+                        "activity": "LKP_GetConfig",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('LKP_GetConfig').output.value",
+                        "type": "Expression"
+                    },
+                    "condition": {
+                        "value": "@or(empty(item().CONSECUTIVE_FAILURES), less(int(item().CONSECUTIVE_FAILURES), pipeline().parameters.CircuitBreakerThreshold))",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "EP_GetAccessToken",
+                "description": "Calls PL_RE_GetAccessToken to obtain a fresh SKY API access token. Token is valid for 60 minutes.",
+                "type": "ExecutePipeline",
+                "dependsOn": [
+                    {
+                        "activity": "FLT_CircuitBreaker",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "PL_RE_GetAccessToken",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "TokenCreatedDate": {
+                            "value": "@utcNow()",
+                            "type": "Expression"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "SET_AccessToken",
+                "description": "Stores the access token in a pipeline variable so inner ForEach activities can reference it without re-authenticating.",
+                "type": "SetVariable",
+                "dependsOn": [
+                    {
+                        "activity": "EP_GetAccessToken",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "variableName": "accessToken",
+                    "value": {
+                        "value": "@activity('EP_GetAccessToken').output.pipelineReturnValue.authToken",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "SET_SubscriptionKey",
+                "description": "Stores the SKY API subscription key in a pipeline variable.",
+                "type": "SetVariable",
+                "dependsOn": [
+                    {
+                        "activity": "EP_GetAccessToken",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "variableName": "subscriptionKey",
+                    "value": {
+                        "value": "@activity('EP_GetAccessToken').output.pipelineReturnValue.subscriptionKey",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "FE_ProcessEntities",
+                "description": "Iterates sequentially over each entity that passed the circuit-breaker filter. Each iteration processes all pending API requests for that entity via PL_RE_DispatchRequests.",
+                "type": "ForEach",
+                "state": "Active",
+                "onInactiveMarkAs": "Succeeded",
+                "dependsOn": [
+                    {
+                        "activity": "SET_AccessToken",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    },
+                    {
+                        "activity": "SET_SubscriptionKey",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    },
+                    {
+                        "activity": "SET_TokenCreatedDate",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('FLT_CircuitBreaker').output.Value",
+                        "type": "Expression"
+                    },
+                    "isSequential": true,
+                    "activities": [
+                        {
+                            "name": "SCR_MarkRunning",
+                            "description": "Upserts the watermark record for this entity to RUNNING status and records the run ID, creating the row if it does not yet exist.",
+                            "type": "Script",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "linkedServiceName": {
+                                "referenceName": "LS_Snowflake",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "MERGE INTO AUDIT_DB.CONFIG.PIPELINE_WATERMARK AS tgt\nUSING (SELECT '@{item().PIPELINE_ID}' AS PIPELINE_ID, '@{item().SOURCE_INSTANCE}' AS SOURCE_INSTANCE, '@{item().ENTITY_ID}' AS ENTITY_ID) AS src\n    ON tgt.PIPELINE_ID = src.PIPELINE_ID AND tgt.SOURCE_INSTANCE = src.SOURCE_INSTANCE AND tgt.ENTITY_ID = src.ENTITY_ID\nWHEN MATCHED THEN UPDATE SET\n    PREVIOUS_WATERMARK = tgt.WATERMARK_VALUE,\n    LAST_RUN_STATUS = 'RUNNING',\n    LAST_RUN_START = CURRENT_TIMESTAMP(),\n    LAST_RUN_ID = '@{pipeline().RunId}',\n    MODIFIED = CURRENT_TIMESTAMP()\nWHEN NOT MATCHED THEN INSERT (\n    PIPELINE_ID, SOURCE_INSTANCE, ENTITY_ID, WATERMARK_VALUE, PREVIOUS_WATERMARK,\n    LAST_RUN_STATUS, CONSECUTIVE_FAILURES, LAST_RUN_ROWS, LAST_RUN_START, LAST_RUN_ID,\n    CREATED, MODIFIED\n) VALUES (\n    '@{item().PIPELINE_ID}', '@{item().SOURCE_INSTANCE}', '@{item().ENTITY_ID}', NULL, NULL,\n    'RUNNING', 0, 0, CURRENT_TIMESTAMP(), '@{pipeline().RunId}',\n    CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP()\n);",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "02:00:00"
+                            }
+                        },
+                        {
+                            "name": "EP_DispatchRequests",
+                            "description": "Calls PL_RE_DispatchRequests to fetch and send all pending API requests for this entity. Waits for completion so SCR_MarkSuccess or SCR_MarkFailed can act on the outcome.",
+                            "type": "ExecutePipeline",
+                            "dependsOn": [
+                                {
+                                    "activity": "SCR_MarkRunning",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "secureInput": true
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "pipeline": {
+                                    "referenceName": "PL_RE_DispatchRequests",
+                                    "type": "PipelineReference"
+                                },
+                                "waitOnCompletion": true,
+                                "parameters": {
+                                    "PipelineId": {
+                                        "value": "@item().PIPELINE_ID",
+                                        "type": "Expression"
+                                    },
+                                    "SourceInstance": {
+                                        "value": "@item().SOURCE_INSTANCE",
+                                        "type": "Expression"
+                                    },
+                                    "EntityId": {
+                                        "value": "@item().ENTITY_ID",
+                                        "type": "Expression"
+                                    },
+                                    "AccessToken": {
+                                        "value": "@variables('accessToken')",
+                                        "type": "Expression"
+                                    },
+                                    "SubscriptionKey": {
+                                        "value": "@variables('subscriptionKey')",
+                                        "type": "Expression"
+                                    },
+                                    "TestRowsPerCombo": {
+                                        "value": "@pipeline().parameters.TestRowsPerCombo",
+                                        "type": "Expression"
+                                    },
+                                    "TokenCreatedDate": {
+                                        "value": "@variables('tokenCreatedDate')",
+                                        "type": "Expression"
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "SCR_MarkSuccess",
+                            "description": "Updates the watermark to SUCCESS, records the request count, and resets CONSECUTIVE_FAILURES to 0.",
+                            "type": "Script",
+                            "dependsOn": [
+                                {
+                                    "activity": "EP_DispatchRequests",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "linkedServiceName": {
+                                "referenceName": "LS_Snowflake",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "UPDATE AUDIT_DB.CONFIG.PIPELINE_WATERMARK\nSET LAST_RUN_STATUS = 'SUCCESS',\n    LAST_RUN_ROWS = (SELECT COUNT(*) FROM INTEGRATION_DB.RAISERS_EDGE.VW_RE_REQUESTS WHERE PIPELINE_ID = '@{item().PIPELINE_ID}' AND SOURCE_INSTANCE = '@{item().SOURCE_INSTANCE}' AND ENTITY_ID = '@{item().ENTITY_ID}'),\n    LAST_RUN_END = CURRENT_TIMESTAMP(),\n    CONSECUTIVE_FAILURES = 0,\n    LAST_ERROR_MESSAGE = NULL,\n    LAST_RUN_ID = '@{pipeline().RunId}',\n    MODIFIED = CURRENT_TIMESTAMP()\nWHERE PIPELINE_ID = '@{item().PIPELINE_ID}'\n    AND SOURCE_INSTANCE = '@{item().SOURCE_INSTANCE}'\n    AND ENTITY_ID = '@{item().ENTITY_ID}';",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "02:00:00"
+                            }
+                        },
+                        {
+                            "name": "SCR_MarkFailed",
+                            "description": "Upserts the watermark to FAILED and increments CONSECUTIVE_FAILURES. Triggers when EP_DispatchRequests fails or is skipped (propagated from SCR_MarkRunning failure). Use the LAST_RUN_ID to correlate with ADF Monitor logs.",
+                            "type": "Script",
+                            "dependsOn": [
+                                {
+                                    "activity": "EP_DispatchRequests",
+                                    "dependencyConditions": [
+                                        "Failed",
+                                        "Skipped"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "linkedServiceName": {
+                                "referenceName": "LS_Snowflake",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "MERGE INTO AUDIT_DB.CONFIG.PIPELINE_WATERMARK AS tgt\nUSING (SELECT '@{item().PIPELINE_ID}' AS PIPELINE_ID, '@{item().SOURCE_INSTANCE}' AS SOURCE_INSTANCE, '@{item().ENTITY_ID}' AS ENTITY_ID) AS src\n    ON tgt.PIPELINE_ID = src.PIPELINE_ID AND tgt.SOURCE_INSTANCE = src.SOURCE_INSTANCE AND tgt.ENTITY_ID = src.ENTITY_ID\nWHEN MATCHED THEN UPDATE SET\n    LAST_RUN_STATUS = 'FAILED',\n    LAST_RUN_END = CURRENT_TIMESTAMP(),\n    CONSECUTIVE_FAILURES = CONSECUTIVE_FAILURES + 1,\n    LAST_ERROR_MESSAGE = LEFT('Run @{pipeline().RunId} failed. Check ADF Monitor for activity-level error details.', 4000),\n    LAST_RUN_ID = '@{pipeline().RunId}',\n    MODIFIED = CURRENT_TIMESTAMP()\nWHEN NOT MATCHED THEN INSERT (\n    PIPELINE_ID, SOURCE_INSTANCE, ENTITY_ID, WATERMARK_VALUE, PREVIOUS_WATERMARK,\n    LAST_RUN_STATUS, CONSECUTIVE_FAILURES, LAST_RUN_ROWS, LAST_RUN_END,\n    LAST_ERROR_MESSAGE, LAST_RUN_ID, CREATED, MODIFIED\n) VALUES (\n    '@{item().PIPELINE_ID}', '@{item().SOURCE_INSTANCE}', '@{item().ENTITY_ID}', NULL, NULL,\n    'FAILED', 1, 0, CURRENT_TIMESTAMP(),\n    LEFT('Run @{pipeline().RunId} failed. Check ADF Monitor for activity-level error details.', 4000),\n    '@{pipeline().RunId}', CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP()\n);",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "02:00:00"
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "SET_TokenCreatedDate",
+                "type": "SetVariable",
+                "dependsOn": [
+                    {
+                        "activity": "EP_GetAccessToken",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "variableName": "tokenCreatedDate",
+                    "value": {
+                        "value": "@activity('EP_GetAccessToken').output.pipelineReturnValue.TokenCreatedDate",
+                        "type": "Expression"
+                    }
+                }
+            }
+        ],
+        "parameters": {
+            "PipelineId": {
+                "type": "string",
+                "defaultValue": "RE_WRITEBACK"
+            },
+            "SourceInstance": {
+                "type": "string",
+                "defaultValue": "SNOWFLAKE_DEV"
+            },
+            "CircuitBreakerThreshold": {
+                "type": "int",
+                "defaultValue": 5
+            },
+            "TestRowsPerCombo": {
+                "type": "int",
+                "defaultValue": 0
+            }
+        },
+        "variables": {
+            "accessToken": {
+                "type": "String"
+            },
+            "subscriptionKey": {
+                "type": "String"
+            },
+            "tokenCreatedDate": {
+                "type": "String"
+            }
+        },
+        "folder": {
+            "name": "RaisersEdge"
+        },
+        "annotations": [],
+        "lastPublishTime": "2026-10-27T09:59:09Z"
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}
+
+--=========================================================================
+
+This is actually the master orchestration pipeline.
+
+The previous pipeline (PL_RE_DispatchRequests) was the worker that actually sends API requests.
+
+This pipeline sits above it and controls:
+
+configuration
+circuit breaker logic
+token management
+auditing
+watermarks
+failure handling
+
+From an architecture perspective:
+
+PL_RE_Writeback
+        |
+        +---- Controls execution
+        |
+        +---- Manages authentication
+        |
+        +---- Applies circuit breaker
+        |
+        +---- Updates audit tables
+        |
+        +---- Calls worker pipeline
+                  |
+                  v
+        PL_RE_DispatchRequests
+                  |
+                  v
+           Blackbaud SKY API
+
+Complete Notepad Architecture
++------------------------------------------------+
+|                PL_RE_Writeback                 |
++------------------------------------------------+
+                     |
+                     v
+
+          +----------------------+
+          | LKP_GetConfig        |
+          | Read Metadata        |
+          | Read Watermarks      |
+          +----------+-----------+
+                     |
+                     v
+
+          +----------------------+
+          | FLT_CircuitBreaker   |
+          | Failure Threshold    |
+          +----------+-----------+
+                     |
+           Pass              Fail
+             |                |
+             v                X
+      Continue         Skip Processing
+
+             |
+             v
+
+     +------------------------+
+     | Obtain Access Token    |
+     +-----------+------------+
+                 |
+                 v
+
+         +---------------+
+         | For Each      |
+         | Entity        |
+         +-------+-------+
+                 |
+                 v
+
+      +----------------------+
+      | Mark RUNNING         |
+      +----------+-----------+
+                 |
+                 v
+
+      +----------------------+
+      | Dispatch Requests    |
+      | (Child Pipeline)     |
+      +----------+-----------+
+                 |
+      +----------+----------+
+      |                     |
+      v                     v
+
+ SUCCESS                FAILURE
+
+      |                     |
+      v                     v
+
+ Mark Success         Mark Failed
+
+      |                     |
+      +----------+----------+
+                 |
+                 v
+
+       Update Watermarks
+
+What Problem Is It Solving?
+
+Suppose you have:
+
+Constituent
+Address
+Phone
+Email
+Relationships
+
+
+Each entity could potentially have:
+
+Hundreds
+Thousands
+Millions
+
+
+of writeback requests.
+
+You need something that:
+
+controls execution
+avoids API overload
+records failures
+prevents endless retries
+
+This pipeline does exactly that.
+
+Step 1. Read Metadata
+LKP_GetConfig
+
+Reads:
+
+AUDIT_DB.CONFIG.PIPELINE_METADATA
+
+
+and
+
+AUDIT_DB.CONFIG.PIPELINE_WATERMARK
+
+
+Purpose:
+
+What entities are enabled?
+How many failures?
+Should we process?
+
+
+Output might look like:
+
+PIPELINE_ID
+SOURCE_INSTANCE
+ENTITY_ID
+CONSECUTIVE_FAILURES
+
+
+Example:
+
+CONSTITUENT      0
+ADDRESS          0
+PHONE            17
+EMAIL            0
+
+Step 2. Circuit Breaker
+
+This is the most architecturally mature aspect of the entire framework.
+
+FLT_CircuitBreaker
+Failure Count < Threshold
+
+
+Default threshold:
+
+5
+
+Why It's Valuable
+
+Without a circuit breaker:
+
+Pipeline Fails
+Retry
+
+Pipeline Fails
+Retry
+
+Pipeline Fails
+Retry
+
+Forever...
+
+
+Potentially:
+
+Millions of API calls
+
+
+to a broken endpoint.
+
+With Circuit Breaker
+Failure 1
+Failure 2
+Failure 3
+Failure 4
+Failure 5
+
+STOP
+
+Notepad Diagram
+Entity
+  |
+  v
+
+Failures ?
+
+  |
+  +---- 0-4 ----> Process
+  |
+  +---- 5+ -----> Block
+
+
+Very good enterprise pattern.
+
+Step 3. Authentication
+EP_GetAccessToken
+
+Calls:
+
+PL_RE_GetAccessToken
+
+
+which you showed earlier.
+
+Returns:
+
+Access Token
+Subscription Key
+Token Date
+
+
+These are stored as variables.
+
+Token Flow
+Key Vault
+    |
+    v
+
+Refresh Token
+    |
+    v
+
+Access Token
+    |
+    v
+
+PL_RE_Writeback
+    |
+    v
+
+Child Pipelines
+
+Step 4. Process Each Entity
+FE_ProcessEntities
+
+This loop is genuinely sequential.
+
+"isSequential": true
+
+
+Unlike the previous pipeline.
+
+Meaning:
+
+Entity A
+    |
+Entity B
+    |
+Entity C
+
+
+one after another.
+
+Why Sequential?
+
+If multiple entities update:
+
+Constituent
+Address
+Relationship
+
+
+there may be dependencies.
+
+For example:
+
+Constituent must exist
+before Address can be updated
+
+
+Sequential processing is often safer.
+
+Step 5. Mark Running
+SCR_MarkRunning
+
+Updates:
+
+PIPELINE_WATERMARK
+
+
+to:
+
+RUNNING
+
+
+and records:
+
+Run ID
+Start Time
+
+
+Think of it as:
+
+Job has started
+
+
+audit information.
+
+Watermark Diagram
+
+Before:
+
+STATUS = SUCCESS
+
+
+Pipeline Starts:
+
+STATUS = RUNNING
+
+
+Pipeline Ends:
+
+STATUS = SUCCESS
+
+
+or
+
+STATUS = FAILED
+
+Step 6. Execute Worker Pipeline
+EP_DispatchRequests
+
+This is where control is handed to:
+
+PL_RE_DispatchRequests
+
+
+which then:
+
+Read Requests
+POST/PATCH
+Capture IDs
+
+
+against Blackbaud.
+
+Step 7. Success Path
+SCR_MarkSuccess
+
+Updates:
+
+PIPELINE_WATERMARK
+
+
+with:
+
+SUCCESS
+Rows Processed
+End Time
+Failures Reset To Zero
+
+Success Diagram
+RUNNING
+    |
+    v
+SUCCESS
+
+Failures = 0
+
+Step 8. Failure Path
+SCR_MarkFailed
+
+Updates:
+
+FAILED
+
+
+and increments:
+
+CONSECUTIVE_FAILURES
+
+Failure Diagram
+Failure Count = 3
+
+Run Fails
+
+Failure Count = 4
+
+
+Eventually:
+
+Failure Count = 5
+
+
+and the circuit breaker blocks further execution.
+
+Very robust.
+
+Architecture Assessment
+
+This pipeline is significantly more sophisticated than a typical ADF pipeline.
+
+Most ADF implementations stop at:
+
+Copy Data
+
+
+This solution includes:
+
+✅ Metadata Driven Processing
+
+✅ Enterprise Audit Tables
+
+✅ Stateful Watermarks
+
+✅ Circuit Breakers
+
+✅ Authentication Reuse
+
+✅ Parent/Child Architecture
+
+✅ Failure Tracking
+
+✅ Run History
+
+✅ Controlled Retry Logic
+
+✅ MDM Integration Pattern
+
+If I Were Reviewing It
+Strong Points
+Excellent separation of concerns
+
+
+Master pipeline:
+
+PL_RE_Writeback
+
+
+Worker pipeline:
+
+PL_RE_DispatchRequests
+
+
+Authentication pipeline:
+
+PL_RE_GetAccessToken
+
+
+Each has one responsibility.
+
+That's very mature design.
+
+Things I'd Question
+1. Sensitive Variables
+
+I still see:
+
+secureOutput = false
+
+
+around token handling.
+
+I'd likely tighten that up.
+
+2. Watermark Usage
+
+Currently the watermark is being used primarily for:
+
+State
+Status
+Failures
+
+
+I don't yet see it driving incremental extraction.
+
+That's not wrong, but I would ask whether future versions should use:
+
+Last Successful Timestamp
+
+
+for change tracking.
+
+Interview-Level Summary
+PL_RE_Writeback is the master orchestration pipeline for
+Raiser's Edge writeback processing. It reads enabled entity
+configurations, applies a circuit breaker to prevent repeated
+failures, obtains a valid Blackbaud access token, and then
+processes each entity sequentially through a child dispatch
+pipeline. Throughout execution it maintains operational state
+within PIPELINE_WATERMARK tables, recording RUNNING,
+SUCCESS, and FAILED outcomes together with failure counts,
+run identifiers, row counts, and timestamps. The design
+implements a resilient enterprise integration pattern with
+auditing, fault isolation, controlled retries, and reusable
+authentication services.
+
+
+Of all the pipelines you've shown, this is the orchestration layer and operational-control layer. The real architecture is the combination of:
+
+PL_RE_Writeback
+        |
+        +---- PL_RE_GetAccessToken
+        |
+        +---- PL_RE_DispatchRequests
+                    |
+                    +---- Blackbaud SKY API
+
+
+Together they form a complete, production-grade MDM-to-Raiser's Edge writeback framework.
+

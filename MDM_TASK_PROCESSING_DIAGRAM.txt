@@ -1,0 +1,116 @@
+MDM TASK PROCESSING - PLAIN-TEXT DIAGRAM
+========================================
+
+Scheduled daily at 06:00 UTC
+Warehouse: WH_NAS_MDM_PROD (PROD task definitions)
+
+  +--------------------------------------------------------------+
+  | TK_STANDARDISE_RECORDS                                       |
+  | Calls MDM_DB.STAGING.SP_STANDARDISE_RECORDS()                |
+  +------------------------------+-------------------------------+
+                                 |
+                                 v
+  +--------------------------------------------------------------+
+  | SP_STANDARDISE_RECORDS() - sequential source processing     |
+  +------------------------------+-------------------------------+
+                                 |
+               +----------------+----------------+
+               |                                 |
+               v                                 v
+  +---------------------------+    +----------------------------+
+  | SP_ETL_RAISERS_EDGE()     |    | SP_ETL_HUBSPOT()           |
+  | Reads RAW.RAISERS_EDGE   |    | Reads RAW.HUBSPOT          |
+  | ODS views                |    | contacts and companies     |
+  |                           |    |                            |
+  | Maps constituent/person  |    | Maps contacts and          |
+  | and organisation data    |    | organisations              |
+  | Merges into standardised |    | Merges into standardised   |
+  | records; updates contact |    | records; updates contact  |
+  | arrays, attributes, flags|    | arrays, attributes, flags |
+  | and four-year rule       |    | and normalises fields     |
+  | Deactivates absent or    |    | Deactivates absent or     |
+  | ineligible records       |    | ineligible records        |
+  +-------------+-------------+    +--------------+-------------+
+                |                                 |
+                +----------------+----------------+
+                                 |
+                                 v
+  +--------------------------------------------------------------+
+  | MDM_DB.STAGING.STANDARDISED_RECORDS                          |
+  | Shared active/inactive records, source IDs, fields and arrays|
+  +------------------------------+-------------------------------+
+                                 |
+                    Dynamics ETL status:
+                    SP_ETL_DYNAMICS() exists, but its call is
+                    commented out in the exported TEST/PROD wrapper.
+                    It is therefore skipped by this task chain.
+                                 |
+                                 v
+  +--------------------------------------------------------------+
+  | TK_BUILD_MATCH_GROUPS                                        |
+  | Calls MDM_DB.MDM.SP_BUILD_MATCH_GROUPS()                     |
+  +------------------------------+-------------------------------+
+                                 |
+                                 v
+  +--------------------------------------------------------------+
+  | Rebuild match working data                                   |
+  | Clear MATCH_CANDIDATES, MATCH_COMPONENTS, MATCH_GROUPS and   |
+  | MATCH_GROUP_MEMBERS, then generate candidate pairs from      |
+  | active standardised records using configured identity rules. |
+  +------------------------------+-------------------------------+
+                                 |
+                                 v
+  +--------------------------------------------------------------+
+  | SP_BUILD_MATCH_COMPONENTS()                                  |
+  | Propagates labels across eligible candidate links to identify|
+  | connected record groups (until stable or 20 iterations).     |
+  +------------------------------+-------------------------------+
+                                 |
+                                 v
+  +--------------------------------------------------------------+
+  | Write MATCH_GROUPS and MATCH_GROUP_MEMBERS                   |
+  | Score groups and assign statuses such as Auto-Approved,      |
+  | Pending Review, or Low Confidence.                           |
+  +------------------------------+-------------------------------+
+                                 |
+                    Task dependency: runs after
+                    TK_BUILD_MATCH_GROUPS completes
+                                 |
+                                 v
+  +--------------------------------------------------------------+
+  | TK_GENERATE_GOLDEN_RECORDS                                   |
+  | Calls MDM_DB.GOLD.SP_GENERATE_GOLDEN_RECORDS()               |
+  +------------------------------+-------------------------------+
+                                 |
+                                 v
+  +--------------------------------------------------------------+
+  | Build/refresh GOLDEN_RECORDS                                  |
+  | Fuse eligible match groups; keep other active records as     |
+  | singletons. Select representative values by recency and      |
+  | completeness, and retain or generate golden IDs.             |
+  +------------------------------+-------------------------------+
+                                 |
+                                 v
+  +--------------------------------------------------------------+
+  | Maintain XREF and staging links                              |
+  | Insert/update source-to-golden links, prune stale links,     |
+  | deactivate superseded golden records, and backfill           |
+  | GOLDEN_RECORD_ID to STANDARDISED_RECORDS.                     |
+  +------------------------------+-------------------------------+
+                                 |
+                                 v
+  +--------------------------------------------------------------+
+  | Outputs                                                       |
+  | STANDARDISED_RECORDS | MATCH_GROUPS / MEMBERS | GOLDEN_RECORDS|
+  | XREF                                                       |
+  +--------------------------------------------------------------+
+
+Separate checks and boundaries
+------------------------------
+- SP_VALIDATE_MDM() is a separate procedure; it is not called by these tasks.
+- A successful task state confirms SQL completion, not record-level correctness.
+  Review procedure return counts, data-quality results, and reconciliations.
+- This diagram describes the exported Snowflake MDM chain. It does not show
+  ADF orchestration, Dynamics API dispatch, or prove that either ran.
+- Task definitions are exported SQL; confirm deployed task state and definitions
+  in the relevant Snowflake account.

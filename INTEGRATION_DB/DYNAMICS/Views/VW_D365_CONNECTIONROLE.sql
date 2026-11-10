@@ -1,0 +1,102 @@
+create or replace view INTEGRATION_DB.DYNAMICS.VW_D365_CONNECTIONROLE(
+	RE_ROLE_NAME,
+	D365_ID,
+	LOAD_ACTION,
+	HOLD_REASON,
+	PAYLOAD,
+	NAME
+) as
+-- One D365 connection role per distinct relation or reciprocal description on
+-- a loadable relationship, ignoring case and padding. The most frequent RE
+-- spelling is used. A relationship is loadable when both ends are RE
+-- constituents and neither end is a canvasser. A role already in D365 (matched
+-- by name, ignoring case) is EXISTS and keeps its D365 id. Where D365 holds two
+-- rows of one name, the oldest wins. Roles are reference data, so GDPR does
+-- not apply.
+WITH LOADABLE AS (
+    SELECT
+        R.RELATION_DESCRIPTION,
+        R.RECIP_RELATION_DESCRIPTION
+    FROM RAW.RAISERS_EDGE.VW_ODS_T_RELATIONSHIPS AS R
+    INNER JOIN RAW.RAISERS_EDGE.VW_ODS_T_CONSTITUENT AS C1
+        ON R.CONSTITUENT_ID = C1.CONSTITUENT_ID
+    INNER JOIN RAW.RAISERS_EDGE.VW_ODS_T_CONSTITUENT AS C2
+        ON R.RELATION_CONSTITUENT_ID = C2.CONSTITUENT_ID
+    WHERE
+        NOT COALESCE(C1.ISCANVASSER, FALSE)
+        AND NOT COALESCE(C2.ISCANVASSER, FALSE)
+),
+
+ROLE_NAMES AS (
+    SELECT TRIM(RELATION_DESCRIPTION) AS ROLE_NAME FROM LOADABLE
+    UNION ALL
+    SELECT TRIM(RECIP_RELATION_DESCRIPTION) AS ROLE_NAME FROM LOADABLE
+),
+
+RE_ROLES AS (
+    SELECT ROLE_NAME AS RE_ROLE_NAME
+    FROM ROLE_NAMES
+    WHERE NULLIF(ROLE_NAME, '') IS NOT NULL
+    GROUP BY ROLE_NAME
+    QUALIFY
+        ROW_NUMBER() OVER (
+            PARTITION BY UPPER(ROLE_NAME)
+            ORDER BY COUNT(*) DESC, ROLE_NAME
+        ) = 1
+),
+
+D365_ROLES AS (
+    SELECT
+        UPPER(TRIM(NAME)) AS NAME_KEY,
+        CONNECTIONROLEID
+    FROM RAW.DYNAMICS.VW_ODS_CONNECTIONROLES
+    WHERE NULLIF(TRIM(NAME), '') IS NOT NULL
+    QUALIFY
+        ROW_NUMBER() OVER (
+            PARTITION BY UPPER(TRIM(NAME))
+            ORDER BY CREATEDON, CONNECTIONROLEID
+        ) = 1
+),
+
+-- Open gates that cover the whole table
+GATES AS (
+    SELECT
+        -- LISTAGG gives an empty string, not NULL, when no gate is open
+        NULLIF(
+            LISTAGG(GATE_CODE, ',') WITHIN GROUP (ORDER BY GATE_CODE), ''
+        ) AS GATE_CODES
+    FROM INTEGRATION_DB.DYNAMICS.VW_D365_REF_LOAD_GATE
+    WHERE
+        D365_TABLE = 'connectionrole'
+        AND IS_OPEN
+        AND ROW_CONDITION_KEY IS NULL
+),
+
+RESOLVED AS (
+    SELECT
+        R.RE_ROLE_NAME,
+        D.CONNECTIONROLEID AS D365_ID,
+        G.GATE_CODES,
+        R.RE_ROLE_NAME AS NAME
+    FROM RE_ROLES AS R
+    LEFT JOIN D365_ROLES AS D
+        ON UPPER(TRIM(R.RE_ROLE_NAME)) = D.NAME_KEY
+    CROSS JOIN GATES AS G
+)
+
+SELECT
+    RE_ROLE_NAME,
+    D365_ID,
+    CASE
+        WHEN D365_ID IS NOT NULL THEN 'EXISTS'
+        WHEN GATE_CODES IS NOT NULL THEN 'HOLD'
+        ELSE 'CREATE'
+    END AS LOAD_ACTION,
+    IFF(
+        D365_ID IS NULL AND GATE_CODES IS NOT NULL,
+        'GATE:' || GATE_CODES,
+        NULL
+    ) AS HOLD_REASON,
+    OBJECT_CONSTRUCT('name', NAME) AS PAYLOAD,
+    NAME
+FROM RESOLVED;

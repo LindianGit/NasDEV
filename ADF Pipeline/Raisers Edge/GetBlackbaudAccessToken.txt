@@ -1,0 +1,154 @@
+{
+    "name": "GetBlackbaudAccessToken",
+    "properties": {
+        "activities": [
+            {
+                "name": "GetRefreshTokenSecret",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "Get_BbApiSubscriptionKey",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "method": "GET",
+                    "url": "https://kv-nas-test-3146.vault.azure.net/secrets/GetRefreshTokenSecret?api-version=7.0",
+                    "authentication": {
+                        "type": "MSI",
+                        "resource": "https://vault.azure.net"
+                    }
+                }
+            },
+            {
+                "name": "GetAuthToken",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "GetRefreshTokenSecret",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "method": "POST",
+                    "headers": {
+                        "Content-Type": "application/x-www-form-urlencoded"
+                    },
+                    "url": "https://oauth2.sky.blackbaud.com/token",
+                    "connectVia": {
+                        "referenceName": "NAS-SDP",
+                        "type": "IntegrationRuntimeReference"
+                    },
+                    "body": {
+                        "value": "@concat('grant_type=refresh_token&refresh_token=',\nactivity('GetRefreshTokenSecret').output.value,\n'&preserve_refresh_token=true')",
+                        "type": "Expression"
+                    },
+                    "authentication": {
+                        "type": "Basic",
+                        "username": "a4b11f15-7fa3-4c76-b049-12666e095a85",
+                        "password": {
+                            "type": "AzureKeyVaultSecret",
+                            "store": {
+                                "referenceName": "LS_AzureKeyVault",
+                                "type": "LinkedServiceReference"
+                            },
+                            "secretName": "GetAuthorizationSecret"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "Return_Vars",
+                "type": "SetVariable",
+                "dependsOn": [
+                    {
+                        "activity": "GetAuthToken",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "variableName": "pipelineReturnValue",
+                    "value": [
+                        {
+                            "key": "authToken",
+                            "value": {
+                                "type": "Expression",
+                                "content": "@activity('GetAuthToken').output.access_token"
+                            }
+                        },
+                        {
+                            "key": "BbApiSubscriptionKey",
+                            "value": {
+                                "type": "Expression",
+                                "content": "@activity('Get_BbApiSubscriptionKey').output.value"
+                            }
+                        }
+                    ],
+                    "setSystemVariable": true
+                }
+            },
+            {
+                "name": "Get_BbApiSubscriptionKey",
+                "type": "WebActivity",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "method": "GET",
+                    "url": "https://kv-nas-test-3146.vault.azure.net/secrets/Bb-Api-Subscription-Key?api-version=7.0",
+                    "authentication": {
+                        "type": "MSI",
+                        "resource": "https://vault.azure.net"
+                    }
+                }
+            }
+        ],
+        "variables": {
+            "accessToken": {
+                "type": "String"
+            },
+            "BbApiSubscriptionKey": {
+                "type": "String"
+            }
+        },
+        "folder": {
+            "name": "RaisersEdge"
+        },
+        "annotations": [],
+        "lastPublishTime": "2026-05-19T10:37:21Z"
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}

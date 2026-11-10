@@ -1,0 +1,187 @@
+CURRENT STATE - SNOWFLAKE, MDM AND ADF (ONE-PAGE VIEW)
+=======================================================
+Answers: "Establish the current state of the Snowflake, MDM and ADF implementation"
+Detail views: MDM_TASK_PROCESSING_DIAGRAM.txt (tasks), RAISERS_EDGE_SOURCES_TARGETS_DEV.txt (ingest)
+Environment matrix: CURRENT_STATE_ASSESSMENT.md
+
+EVIDENCE KEY
+  [LIVE]   verified in Snowflake (task history screenshot)
+  [EXPORT] seen in the SQL export files only - not confirmed deployed
+  [TALK]   stated by NAS in the talks - not verified
+  [NONE]   no artefacts seen
+  [OFF]    exists in code but switched off / not called
+
+
+1. END-TO-END FLOW AS DESCRIBED AND AS FOUND
+--------------------------------------------
+
+  KEY:  [V] verified   [E] seen in export   [T] stated in talks   [?] not seen   (off) switched off
+
+  SOURCES            LOAD               SNOWFLAKE RAW                          MDM (06:00 UTC, 3 tasks)
+  ----------------   ----------------   ------------------------------------   ------------------------
+  Raisers Edge       ADF                RAISERS_EDGE.STG_T_* (72)  [V]
+  SQL Server   -->   black box     -->        |
+  72 T_* tables [V]  full copy [V]              v  [?] writer unseen
+                                         RAW_PROD...ODS_T_*  [V]
+                                                |  WHERE NOT IS_DELETED
+                                                v
+                                         VW_ODS_T_*  [V] ----> (A) also feeds the Dynamics views, below
+                                                |
+                                                |  SP_ETL_RAISERS_EDGE
+                                                v
+                                         +---------------------------+
+                                         | STANDARDISED_RECORDS [E]  |   one table, both sources
+                                         | (MDM_DB.STAGING)          |   RE-<id> and HubSpot rows
+                                         +---------------------------+
+                                            ^                 |
+                         SP_ETL_HUBSPOT     |                 |  SP_BUILD_MATCH_GROUPS
+                                            |                 v
+  HubSpot  --> [?] loader unseen --> RAW.HUBSPOT.      MATCH GROUPS   <-- sets of rows judged to be the
+                                      ODS_OBJECTS_* [E]       |             same person/organisation
+                                                              v             (10 match methods, scored)
+                                                       GOLDEN + XREF   <-- (B) golden = one merged record;
+                                                              |             XREF = link back to sources
+        +-----------------------------------------------------+
+        |
+        v
+  DYNAMICS MAPPING VIEWS - INSIDE SNOWFLAKE  (DEV only, not live)
+
+        (A) VW_ODS_T_*  [V]              (B) GOLDEN + XREF  [E]
+            RE detail: phones, emails        golden ID + merged fields
+                  |                                  |
+                  +----------------+-----------------+
+                                   v
+                       VW_D365_CONTACT / VW_D365_ACCOUNT [E]
+                       (Dynamics field names, CREATE/UPDATE action)
+                                      |
+                                      v
+  PAYLOAD BUILD - INSIDE SNOWFLAKE
+
+                       DT_D365_CONTACT_PAYLOAD / DT_D365_ACCOUNT_PAYLOAD [E]
+                       (stored JSON payload, GOLDEN_RECORD_ID, hourly refresh)
+                                      |
+                                      v   (method, URL, body; new/retry/changed only; max 2000 per entity)
+                       +------------------------+
+                       | VW_D365_REQUESTS  [E]  |  last object inside Snowflake = the hand-off view
+                       +------------------------+
+                                      |
+   ===================================|=====  SNOWFLAKE BOUNDARY  ==================================
+                                      v   OUT OF SNOWFLAKE = data leaving for other systems
+                       +-----------------------------+
+                       | ADF  (BLACK BOX)            | ===> Dynamics 365 API (core CRM, not live)
+                       | [inferred: reads the view]  |
+                       | pipelines not seen          |
+                       +-----------------------------+
+
+  Other exits (same boundary):
+  VW_RE_* [E] --> RE_REQUESTS [E] | ===> ADF (BLACK BOX) [inferred] ===> Blackbaud API (RE write-back)
+  GOLDEN_RECORDS                  | ===> HubSpot   [T] stated in talks; mechanism [?] not seen
+
+  Only CONTACT and ACCOUNT payloads exist; gifts, events, memberships and tax have none.
+
+
+2. THE DAILY TASK CHAIN (WHAT RUNS TODAY)
+-----------------------------------------
+
+  06:00 UTC daily  [LIVE: 3 tasks SUCCEEDED 24-30 Oct 2026]
+  (current state started/suspended: NOT YET CHECKED - run SHOW TASKS)
+
+  +------------------------------+
+  | TK_STANDARDISE_RECORDS       |
+  | SP_STANDARDISE_RECORDS()     |
+  |   calls SP_ETL_RAISERS_EDGE  |  ON   [EXPORT]  (still active in PROD export)
+  |   calls SP_ETL_HUBSPOT       |  ON   [EXPORT]
+  |   SP_ETL_DYNAMICS            |  OFF  [OFF]     (commented out: known issue)
+  +--------------+---------------+
+                 | AFTER
+  +--------------v---------------+
+  | TK_BUILD_MATCH_GROUPS        |
+  | SP_BUILD_MATCH_GROUPS()      |
+  |   10 match methods, scores   |  [EXPORT]
+  |   RE-ID link = identity edge |
+  +--------------+---------------+
+                 | AFTER
+  +--------------v---------------+
+  | TK_GENERATE_GOLDEN_RECORDS   |
+  | SP_GENERATE_GOLDEN_RECORDS() |
+  |   golden ID + XREF           |  [EXPORT]
+  |   recency-only survivorship  |
+  +------------------------------+
+
+  Not in the chain:  SP_VALIDATE_MDM()   [OFF] - exists, nothing calls it
+
+
+3. WHAT EXISTS WHERE (SQL FILES IN THE EXPORTS)
+-----------------------------------------------
+
+                                   DEV        TEST       PROD
+  SQL files                         99         30         31
+  The 3 MDM tasks                   yes        yes        yes   (warehouse name differs)
+  MDM procedures and tables         yes        yes        yes   (9 files differ DEV vs TEST)
+  RAW.RAISERS_EDGE (RE_REQUESTS    yes        no         no
+    table + 15 enrichment views;
+    STG_/ODS_ tables not exported)
+  Dynamics views (24)               yes        3 only     3 only
+  Dynamic tables (2 payload)        yes        no         no     <-- VW_D365_REQUESTS needs them
+  Load-gate and REF views           yes        no         no
+  Extra file                        -          -          STANDARDISED_RECORDS_20260715
+                                                          (not in TEST)
+
+  Reading: DEV is far ahead of TEST/PROD. Only the MDM chain has been promoted.
+
+
+4. WHAT IS PROVEN AND WHAT IS NOT
+---------------------------------
+
+  PROVEN
+   [LIVE]    Three tasks ran and succeeded daily 24-30 Oct 2026 (about 06:00 UTC)
+   [VERIFIED] ADF config rows (PIPELINE_METADATA): 72 Raisers Edge tables read from SQL Server,
+              FULL load, all enabled, landing as RAISERS_EDGE.STG_T_* (DEV extract)
+
+  SEEN IN CODE ONLY (deployment unverified)
+   [EXPORT]  Task definitions, procedures, tables, match rules, golden record logic
+   [EXPORT]  Dynamics views and payload dynamic tables (DEV)
+
+  NOT SEEN / NOT CHECKED
+   [NONE]    ADF pipelines, triggers, schedule and run results (config rows seen; no ADF access)
+   [NONE]    The step that fills ODS_T_* from STG_T_* (IS_DELETED handling). Seen: VW_ODS_T_* (DEV) reads
+             RAW_PROD.RAISERS_EDGE.ODS_T_* WHERE NOT IS_DELETED -> ASSUMED: DEV view layer reads PROD-named raw data
+             (not a clean DEV/PROD split; to confirm with SHOW DATABASES)
+   [NONE]    Whether tasks are currently started or suspended (SHOW TASKS)
+   [NONE]    Live DDL vs exported files (GET_DDL comparison)
+   [NONE]    Record-level correctness; whether Dynamics write-back has ever run
+   [NONE]    Azure DevOps / DLSync repository (access not yet granted)
+   [NONE]    Known-issue document docs/known-issues/mdm-exact-org-name-no-postcode-check.md
+
+
+5. KNOWN GAPS AND RISKS IN THE CURRENT SET-UP
+---------------------------------------------
+
+  [!] SP_ETL_DYNAMICS switched off - exact-org-name matching with no postcode check
+  [!] RE soft-delete uses NOT IN: an empty or static RE source would deactivate every RE record
+  [!] SP_XREF_CAPTURE* procedures have empty bodies in the exports (may be an export artefact)
+  [!] VW_D365_REQUESTS references dynamic tables that exist only in DEV
+  [!] SP_VALIDATE_MDM not scheduled - no automatic data-quality check after each run
+  [!] Survivorship is recency-only (no source priority)
+  [!] A RE-ID identity link is built into matching - removing RE affects match results
+  [!] Mapping workbook: about 44% of required fields have no source; cut-off criteria blank
+  [!] TEST and PROD are separate Snowflake accounts - parity not yet checked live
+
+
+6. HOW TO CLOSE THE EVIDENCE GAPS (NEXT STEPS)
+----------------------------------------------
+
+   SHOW TASKS IN SCHEMA MDM_DB.STAGING;               -> started or suspended
+   GET_DDL on tasks, procedures, dynamic tables       -> compare with exports
+   TASK_HISTORY per environment                       -> TEST and PROD runs
+   Dynamic table refresh history                      -> payloads current?
+   Reconciliation counts (source vs standardised vs golden)
+   ADF Monitor (read-only access)                     -> pipeline runs and failures
+   Azure DevOps / DLSync repo                         -> deployed vs source of truth
+
+
+7. SUMMARY IN ONE LINE
+----------------------
+
+  The MDM chain is built, promoted to PROD and running daily; everything that serves
+  Dynamics is still DEV-only, and ADF has not been reviewed.

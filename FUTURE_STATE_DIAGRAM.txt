@@ -1,0 +1,294 @@
+FUTURE STATE - POST-MIGRATION SNOWFLAKE, MDM AND DYNAMICS
+=========================================================
+Companion to CURRENT_STATE_DIAGRAM.txt
+
+PURPOSE
+-------
+This is a target-state view of how the current flow is expected to change after the
+Raisers Edge (RE) to Dynamics 365 migration and the RE MDM transition are complete.
+It is a design based on the local code, migration specs and NAS talks; it is NOT
+evidence that the target objects have been deployed or that the migration is complete.
+
+COMMENT / EVIDENCE KEY
+  [COMMENT]   Explains the diagram or a meaningful design change.
+  [CODE]      Present in the supplied SQL exports; live deployment may differ.
+  [TALK]      Direction described by NAS in the talks.
+  [TARGET]    Proposed end-state in the migration specs, not yet verified live.
+  [VERIFY]    Needs a business decision, partner detail, test or live-environment check.
+  [ONE-OFF]   Migration flow; runs for cutover and reconciliation, then becomes static.
+  [DAILY]     Ongoing operational flow after go-live.
+
+
+1. TRANSITION IN ONE PICTURE
+----------------------------
+
+  TODAY [CODE / CURRENT-STATE EXPORTS]
+
+  Raisers Edge --ADF--> RAW RE --> SP_ETL_RAISERS_EDGE --+
+                                                        |
+  HubSpot --------------> RAW HubSpot --> SP_ETL_HUBSPOT +--> STANDARDISED_RECORDS
+                                                        |             |
+  Dynamics (ETL off) ---> RAW Dynamics --> SP_ETL_DYNAMICS (OFF)       v
+                                                        |       MATCH GROUPS
+                                                        |             |
+                                                        +------> GOLDEN + XREF
+                                                                      |
+                         RE views ------------------------------+      +--> Dynamics
+                                                               |           payloads (DEV)
+                                                               +--> HubSpot (mechanism not evidenced)
+
+  [COMMENT] The current export has RE and HubSpot in the active standardisation wrapper.
+            Dynamics ingestion is present but disabled. Dynamics mapping/payload objects
+            are more complete in DEV than in the TEST/PROD exports.
+
+                                  |
+                                  | MIGRATION: establish baseline; close mapping gaps;
+                                  | fix/validate Dynamics path; seed legacy-ID crosswalk;
+                                  | parallel-run and reconcile before switching sources.
+                                  v
+
+  TARGET AFTER MIGRATION [TARGET / NOT YET LIVE-VERIFIED]
+
+  +-------------------+       +-----------------------------------------------+
+  | FROZEN RE HISTORY |------>| Legacy-ID crosswalk / retained historical XREF|
+  | final snapshot    |       | RE ID <-> HubSpot ID <-> Dynamics ID <-> GOLDEN|
+  +-------------------+       +-----------------------+-----------------------+
+        | [ONE-OFF]                                    | identity continuity
+        |                                               v
+        |                              +-------------------------------------+
+        |                              | DAILY SUPPORTER FLOW (FLOW A)       |
+        |                              | RAW HubSpot + RAW Dynamics          |
+        |                              |          -> standardise             |
+        |                              |          -> match / golden / XREF   |
+        |                              |          -> Contact / Account       |
+        |                              +------------------+------------------+
+        |                                                 |
+        |                     +---------------------------+--------------------------+
+        |                     |                                                      |
+        |                     v                                                      v
+        |             Dynamics supporter payloads                          HubSpot alignment
+        |             (POST/PATCH, state, IDs)                             [TALK; route to verify]
+        |                     |                                                      ^
+        |                     v                                                      |
+        |              Snowflake hand-off                                          |
+        |                     |                                                      |
+        |                     v                                                      |
+        |              ADF -> Dynamics API / landing zone ----------------------------+
+        |                     |
+        |                     +---- success / failure / Dynamics ID ---->
+        |                                      Snowflake write-back state + XREF
+        |
+        +--> RE-source transaction/reference data --> mapping + load gates
+             --> Flow B payloads, linked to Dynamics supporter IDs via crosswalk
+             --> ADF -> Dynamics [ONE-OFF, ordered loads, reconciled, then static]
+
+  [COMMENT] RE stops being a changing input to the daily MDM. The final RE snapshot
+            and historical IDs remain available for migration, audit and lookup; after
+            the cooling-off period, retire RE feeds and active RE-specific code while
+            retaining the agreed archive/crosswalk.
+  [COMMENT] Flow A (supporters) remains a daily MDM and sync process. Flow B
+            (transactions and reference data) bypasses supporter MDM, uses the
+            supporter/Dynamics ID created by Flow A, and is a one-off migration.
+  [VERIFY]  The talks describe Snowflake keeping HubSpot and Dynamics aligned, but do
+            not establish the final HubSpot write-back route or its operational status.
+
+
+2. TARGET DAILY MDM CHAIN - FLOW A: SUPPORTERS
+----------------------------------------------
+
+  HubSpot source feed [DAILY]                 Dynamics source feed [DAILY]
+  contacts / companies                        contacts / accounts
+        |                                             |
+        +----------------------+----------------------+
+                               v
+                     RAW / source-specific loads
+                               |
+                               v
+                  SP_STANDARDISE_RECORDS()
+                  +------------------------------+
+                  | source config / enabled flags|
+                  | HubSpot: enabled             |
+                  | Dynamics: enabled after fix  |
+                  | RE: frozen, then retired     |
+                  +---------------+--------------+
+                                  |
+                                  v
+                    STANDARDISED_RECORDS
+                    HubSpot + Dynamics rows
+                    (RE history not refreshed)
+                                  |
+                                  v
+                    SP_BUILD_MATCH_GROUPS()
+                    +----------------------------------------------+
+                    | Use validated crosswalk / shared legacy ID   |
+                    | instead of RE-record-dependent identity edges|
+                    | Keep other tested match methods and thresholds|
+                    +----------------------+-----------------------+
+                                           |
+                                           v
+                    SP_GENERATE_GOLDEN_RECORDS()
+                    +----------------------------------------------+
+                    | Preserve existing GOLDEN_RECORD_ID values    |
+                    | Apply agreed source-priority survivorship    |
+                    | Maintain XREF for retained and historical IDs |
+                    +----------------------+-----------------------+
+                                           |
+                    +----------------------+----------------------+
+                    |                                             |
+                    v                                             v
+          Validate / reconcile                         Contact + Account payloads
+          counts, duplicates, IDs,                     POST/PATCH, batch and state
+          completeness, unexpected                     through Snowflake hand-off
+          inactivations                                      |
+                    |                                         v
+                    +-------------------------------> ADF -> Dynamics
+                                                         |
+                           returned status / Dynamics IDs |
+                                  +----------------------+
+                                  v
+                       write-back state + XREF/crosswalk
+                                  |
+                                  +----> next daily run resolves stable IDs
+
+  [COMMENT] The three existing scheduled tasks can remain in sequence:
+            TK_STANDARDISE_RECORDS -> TK_BUILD_MATCH_GROUPS ->
+            TK_GENERATE_GOLDEN_RECORDS. The task schedule itself does not remove
+            RE dependencies; the source procedures, matching, survivorship and XREF
+            handling must all be changed and validated.
+  [TARGET]  Put source activation behind configuration rather than commenting ETL calls
+            in and out. Freeze RE before disabling its feed, and guard against the
+            existing empty-source soft-delete risk.
+  [VERIFY]  Make SP_VALIDATE_MDM part of an agreed monitored validation step. The
+            current exports show it outside the three-task chain.
+  [VERIFY]  Confirm the Dynamics known issue is fixed, the returned ID is captured,
+            and payload/state-table dependencies exist in TEST and PROD before rollout.
+
+
+3. TARGET ONE-OFF MIGRATION - FLOW B: TRANSACTIONS / REFERENCE DATA
+--------------------------------------------------------------------
+
+  Frozen Raisers Edge history
+  gifts, events, participants, memberships, tax and other in-scope entities
+             |
+             v
+  Agreed Mapping V6 + source/default decisions + cut-off criteria
+             |
+             +--> unresolved / unmapped / unsafe rows --> HOLD / exception reason
+             |
+             v
+  Reference and lookup payloads
+             |
+             v
+  Resolve each supporter through:
+       legacy RE ID -> crosswalk -> GOLDEN_RECORD_ID -> Dynamics supporter ID
+             |
+             v
+  Build entity payloads (no person matching / golden-record generation here)
+             |
+             v
+  ADF hand-off -> Dynamics landing zone / API
+             |
+             v
+  Record success, failure, returned IDs; reconcile each entity; retry safely
+
+  ORDER (each stage released after the prior stage reconciles):
+    1. Reference / lookup data
+    2. People and organisations (Flow A creates or resolves supporter IDs)
+    3. Address, consent, relationships
+    4. Events, then participants
+    5. Payment schedules and direct debits
+    6. Transactions / lines, restrictions, tributes and soft credits
+    7. Tax declarations
+    8. Memberships, commitments and enquiries
+    9. Final delta, reconciliation, then freeze RE
+
+  [COMMENT] Flow B is not another MDM feed. It carries the already-resolved supporter
+            ID as a foreign key so transactional records point to the right Dynamics
+            person or organisation.
+  [VERIFY]  Mapping coverage, cut-off rules, gift splits/codes and the Dynamics-side
+            payload contract remain prerequisites. Open questions should hold rows,
+            not silently omit them or guess values.
+  [COMMENT] Once the final delta and acceptance checks pass, Flow B is static; it does
+            not become a daily transaction-sync process in this target design.
+
+
+4. WHAT CHANGES FROM THE CURRENT-STATE DIAGRAM
+----------------------------------------------
+
+  Current diagram element                    Target-state treatment
+  -----------------------------------------  ----------------------------------------
+  ADF full-copy RE feed / STG_T_*            Final snapshot, then stop the live feed.
+  SP_ETL_RAISERS_EDGE in daily wrapper       Freeze first; disable; remove only later.
+  RE-<CONSTITUENT_ID> as identity anchor     Retain historical link in crosswalk/XREF;
+                                             match through validated shared identifiers.
+  SP_ETL_DYNAMICS marked OFF                 Fix known issue, map gaps, test, then enable.
+  STANDARDISED_RECORDS with RE + HubSpot    HubSpot + Dynamics active sources; RE history
+                                             is frozen/archive, not refreshed.
+  Golden record survivorship by recency      Use an agreed source-priority policy and
+                                             verify field-level parity.
+  Contact/Account payloads in DEV            Promote and verify all dependencies across
+                                             DEV, TEST and PROD before production use.
+  Gifts/events/memberships/tax without       Add one-off Flow B mapping, gates, payloads,
+  complete payload route                     state, write-back and reconciliation.
+  RE-dependent XREF / validation             Preserve historical IDs; revise RE-specific
+                                             measures and validate retained-source links.
+  Unverified Dynamics write-back            Persist outcomes and returned Dynamics IDs
+                                             so future runs PATCH/link rather than duplicate.
+
+  [COMMENT] "Remove RE" means remove it as an ongoing operational dependency, not erase
+            historical RE identifiers or discard the final source snapshot before
+            audit, lookup, parity and cut-over requirements are met.
+
+
+5. CUTOVER GUARDRAILS - DO NOT SKIP
+-----------------------------------
+
+  BEFORE changing production:
+    [ ] Verify live task state, deployed DDL, XREF capture and payload dependencies.
+    [ ] Capture a reproducible baseline of standardised records, match groups,
+        golden IDs/values, XREF and payload counts.
+    [ ] Seed and test the legacy-ID crosswalk; confirm the Dynamics legacy-ID field.
+    [ ] Resolve required field sources/defaults and sign off losses and cut-off rules.
+    [ ] Fix and validate the Dynamics organisation matching issue in TEST.
+    [ ] Run RE-frozen and HubSpot/Dynamics MDM paths in parallel in TEST.
+    [ ] Compare stable golden IDs, member sets, match outcomes, field values,
+        duplicate/orphan XREFs, payloads and inactivation counts against agreed thresholds.
+    [ ] Reconcile Flow B by entity, including record counts, financial totals,
+        supporter links, holds, exceptions and Dynamics responses.
+
+  ROLLBACK / RETIREMENT:
+    Phase 1-2: restore the RE source flag if a tested rollback is needed.
+    Final retirement: stop RE feeds only after parity and production acceptance;
+    remove RE code after the agreed cooling-off period, retaining the archive and
+    legacy crosswalk required for historical lookups.
+
+  [COMMENT] These are proposed acceptance guardrails from the draft specs, not evidence
+            that the checks have passed. Proposed numeric tolerances require NAS sign-off.
+
+
+6. SOURCES USED FOR THIS TARGET VIEW
+------------------------------------
+
+  CURRENT_STATE_DIAGRAM.txt
+    Current exported flow, evidence labels, task chain, deployment gaps and known risks.
+
+  MDM_DB/MDM/RAISERS_EDGE_REMOVAL_SPEC.md
+    Hybrid transition recommendation; frozen RE phase; crosswalk and golden-ID
+    continuity; parity tests; phased DEV -> TEST -> PROD approach.
+
+  MDM_DB/MDM/SPEC_2_DYNAMICS_MIGRATION_SNOWFLAKE_BUILD.md
+    Flow A (daily supporter MDM) vs Flow B (one-off transactional/reference migration);
+    Snowflake-to-ADF hand-off, load sequence, mapping and reconciliation requirements.
+
+  MDM_DB/MDM/SPEC_2_DIAGRAM.txt
+    Compact two-flow diagram and migration phasing.
+
+  Nas_Talks.txt
+    NAS direction: Snowflake remains the integration layer; RE is expected to become
+    static at Dynamics go-live; Dynamics is the core CRM; Snowflake is expected to help
+    keep HubSpot and Dynamics aligned. These statements describe intent, not verified
+    production behavior.
+
+  [COMMENT] The target view intentionally separates code seen in exports, statements
+            from talks, and proposed design. Confirm live deployment, business rules,
+            system ownership and partner hand-off contracts before treating it as final.

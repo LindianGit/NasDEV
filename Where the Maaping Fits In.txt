@@ -1,0 +1,34 @@
+
+The workbook is the NAS "Source to Target Mappings", with 16 sheets. It's the design for the final step, 
+loading Raisers Edge (RE) data into Dynamics, and it's still work in progress. My counts come from a quick profile, so treat them as approximate.
+
+**What's in it**
+- **Mapping V6** is the core sheet, with about 3,985 rows. Each row is one Dynamics field. They span 81 Dynamics entities, grouped by area (Supporters, Finance, Events, Recurring Payments, Membership, Opportunities and so on). Each row is meant to say where the value comes from: an RE table and field (the "FS" columns look like the RE front-end tables), the Snowflake golden record, and the business logic to apply. It also carries a DevOps ticket, a "required for migration" flag and a "reviewed" flag.
+- **Mapping Progress / Entities Status** track the entities, field counts and DevOps task completion.
+- **Gift Code, Pay Type, Existing Gift Code Use** hold the lookup mappings, for example RE pay method to Dynamics payment type.
+- **Cut off criteria** is nearly empty. It's meant to define when a contact or organisation counts as active, with a question about how many years.
+- **Gift Splits Challenge** is a nearly empty placeholder.
+- **OLD Mapping V1/V2/V4&5 and Entities list V1/V2/V4/V6** are version history.
+
+**How complete it is**
+- Only about 463 of the 3,985 fields are marked required for migration. The rest are mostly system fields (Created By and the like).
+- Of those 463, about 259 (56%) have an RE or FS source filled in. The gaps are biggest in Transaction, Event Participant, Tax Declaration, Membership and Enquiry.
+- Only 806 rows are marked "reviewed". Only about 149 rows have a DevOps ticket, and business logic is written for only about 72.
+- The golden-record column is almost empty (4 rows).
+- Contact and Organisation are the most developed (about 63 of 73 and 24 of 26 required fields have a source). Contact has 73 required fields, so these are the ones the MDM serves today.
+- The Mapping Progress percentages and the "Columns Mapped" count in Entities Status don't reconcile cleanly with the row counts. I haven't resolved why.
+
+**Where it fits in the final solution**
+1. **It is the target spec for the Dynamics load.** The incumbent's quote is for building payloads from it, and NAS says it's done. The data says otherwise: roughly half the required fields have no source and most have no logic. That is useful evidence for the estimate.
+2. **It is split into two different jobs.**
+   - Contact, Organisation, Address, Consent and Relationship are the MDM and golden-record side. Today's MDM, `SP_ETL_DYNAMICS` and the dynamic tables map to this. Raisers Edge removal sits here.
+   - Transaction, Payment Schedule, Event, Event Participant, Membership and Tax are RE transactional data. They go straight from ADF or RAW to Dynamics and don't need the MDM. Nothing in the code I've seen covers them.
+3. **It affects the Raisers Edge removal spec.** The spec assumed Dynamics replaces RE inside the MDM. The mapping shows the RE sources are mostly raw tables feeding Dynamics directly. So RE is a one-off migration source for the transaction data, not a live input to the MDM. The RE-removal work and the Dynamics migration are therefore separate pieces of work. I'd update the spec's scope to say so.
+4. **It gives the data for sizing.** Fields without a source, entity counts by group and the ticket backlog give a bottom-up estimate for the Dynamics build.
+
+**Gaps to raise with NAS**
+- The "cut off criteria" (which contacts count as active) is blank, but it decides what gets migrated.
+- The Gift Splits challenge is unresolved.
+- The mapping has no Dynamics payload definitions, which matches what NAS said about the documentation not yet existing.
+
+Shall I write this up as a section or document in the folder structure? A gap table by entity (required fields, with source and without) would be a good addition. I can also update the Raisers Edge removal spec to separate the MDM scope from the one-off migration.

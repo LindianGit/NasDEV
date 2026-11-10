@@ -1,0 +1,31 @@
+RELATION_DESCRIPTION,RECIP_RELATION_DESCRIPTION,ROWS_N,SAMPLE_ID
+Employer,Employee,95059,20300
+,,82241,3868
+Child,Parent,8599,2
+Spouse,Spouse,6943,9404
+Employee,Employer,5776,10194
+Trustee,,3611,9413
+Child,,1236,5794
+Trustee,Trust,1117,9407
+Husband,Wife,913,7512
+Wife,Husband,759,24910
+Employee,,531,9800
+Son,Mother,236,23849
+Partner,Partner,194,36794
+Son,,189,9132
+Contact,,184,7248
+Son,Parent,150,94735
+Friend,Friend,136,3443
+Unknown Relationship,Unknown Relationship,133,1953
+Ex Employee,,131,10822
+Relative,Relative,101,1995
+Employee,Trust,97,9434
+Daughter,Mother,84,32943
+Employs,Employee,78,35750
+Co-ordinator,,72,9756
+School,,69,372274
+Parent,Child,65,1772
+Director,,64,9426
+Mother,Son,63,23077
+Son,Father,57,60945
+Volunteer,Beneficiary,55,96781

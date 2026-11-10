@@ -1,0 +1,1 @@
+create or replace sequence MDM_DB.GOLD.SEQ_GOLDEN_RECORD_ID start with 1 increment by 1 noorder;

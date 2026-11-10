@@ -1,0 +1,233 @@
+
+
+
+ 
+==============================================================================
+PL_D365_DISPATCHREQUESTS
+==============================================================================
+Purpose:
+    Send pending records from Snowflake into Dynamics 365 Dataverse
+    using either POST (create) or PATCH (update).
+
+    INPUT  = VW_D365_REQUESTS
+    OUTPUT = Dynamics 365 + Audit Logs + XREF updates
+
+Me:  this is the end pipeline that sends to Dynamaics
+==============================================================================
+
+
+    +------------------------------------------------------+
+    | LKP_GetRequests                                      |
+    |------------------------------------------------------|
+    | SELECT * FROM VW_D365_REQUESTS                       |
+    | WHERE PipelineId                                     |
+    |   AND SourceInstance                                 |
+    |   AND EntityId                                       |
+    +----------------------+-------------------------------+
+                           |
+                           |
+                           v
+
+    +------------------------------------------------------+
+    | FE_ApiRequests (ForEach)                             |
+    |------------------------------------------------------|
+    | Parallel execution                                   |
+    | batchCount = 5                                       |
+    +----------------------+-------------------------------+
+                           |
+                           |
+                           v
+
+                   +--------------------+
+                   | IF_PostOrPatch     |
+                   +---------+----------+
+                             |
+          +------------------+------------------+
+          |                                     |
+          | POST                                | PATCH
+          | New record                          | Existing record
+          v                                     v
+
+
+==============================================================================
+POST PATH (CREATE IN D365)
+==============================================================================
+
+    +------------------------------------------------------+
+    | WEB_Post                                             |
+    |------------------------------------------------------|
+    | POST Dataverse API                                   |
+    | Uses Managed Identity                                |
+    +----------------------+-------------------------------+
+                           |
+              +------------+------------+
+              |                         |
+              | Success                 | Failure
+              |                         |
+              v                         v
+
+    +------------------------+     +-------------------------+
+    | SCR_CAPTURE_XREF       |     | SET_BuildPostFailedSQL  |
+    |------------------------|     +------------+------------+
+    | Save new Contact/      |                  |
+    | Account GUID           |                  v
+    +------------+-----------+      +------------------------+
+                 |                  | SCR_LogPostFailed      |
+                 |                  |------------------------|
+                 |                  | Log error to Snowflake |
+                 |                  +------------------------+
+                 |
+      +----------+----------+
+      |                     |
+      | Success             | Failure
+      |                     |
+      v                     v
+
++---------------------+   +------------------------+
+| SCR_LogPostSuccess  |   | SCR_LogXrefCaptureFail |
+|---------------------|   |------------------------|
+| Status 201 Created  |   | POST worked but XREF   |
+| Logged as Success   |   | failed                 |
++---------------------+   | Log special status     |
+                          | XREF_CAPTURE_FAILED    |
+                          +------------------------+
+
+
+==============================================================================
+PATCH PATH (UPDATE EXISTING D365 RECORD)
+==============================================================================
+
+    +------------------------------------------------------+
+    | WEB_Patch                                            |
+    |------------------------------------------------------|
+    | PATCH Dataverse API                                  |
+    | Uses Managed Identity                                |
+    +----------------------+-------------------------------+
+                           |
+              +------------+------------+
+              |                         |
+              | Success                 | Failure
+              |                         |
+              v                         v
+
+ +----------------------+    +-----------------------------+
+ | SCR_LogPatchSuccess  |    | SET_BuildPatchFailedSQL     |
+ |----------------------|    +-------------+---------------+
+ | Status 204           |                  |
+ | No Content           |                  v
+ +----------------------+     +----------------------------+
+                              | SCR_LogPatchFailed         |
+                              |----------------------------|
+                              | Log HTTP code             |
+                              | Log timeout/errors        |
+                              +----------------------------+
+
+
+==============================================================================
+LOGGING
+==============================================================================
+
+ALL RESULTS GO HERE:
+
+    AUDIT_DB.MONITORING.SP_D365_LOG_RESPONSE
+
+Records:
+
+    Golden Record ID
+    Entity
+    Payload MD5
+    HTTP Status
+    Error Type
+    Error Message
+    Pipeline Run ID
+
+Examples:
+
+    SUCCESS (201)
+    SUCCESS (204)
+
+    HTTP_400
+    HTTP_404
+    HTTP_429
+    TIMEOUT
+    WEB_ACTIVITY_FAILED
+
+    XREF_CAPTURE_FAILED
+
+
+==============================================================================
+XREF CAPTURE
+==============================================================================
+
+Example:
+
+Snowflake Customer
+    GR_1001
+
+POST creates record in D365
+
+D365 returns:
+
+    CONTACTID =
+    5B6E8A11-C12D-4D29-A123-XXXXXXXX
+
+Stored by:
+
+    SP_XREF_CAPTURE_D365_ID
+
+Result:
+
+    GR_1001
+       |
+       +-------> D365 CONTACTID
+
+Future runs will use PATCH instead of POST.
+
+This prevents duplicate customers.
+
+
+==============================================================================
+FINAL STEP
+==============================================================================
+
+SET_ReturnVars
+
+Returns:
+
+    rowsDispatched
+
+Example:
+
+    rowsDispatched = 1,245
+
+Passed back to parent pipeline:
+
+    PL_D365_Writeback
+
+
+==============================================================================
+SUMMARY
+==============================================================================
+
+SNOWFLAKE VIEW
+       |
+       v
+  Get Requests
+       |
+       v
+    ForEach
+       |
+       +---- POST ----> Create D365 Record
+       |                    |
+       |                    +--> Capture GUID
+       |                    +--> Update XREF
+       |                    +--> Log Result
+       |
+       +---- PATCH ---> Update D365 Record
+                            |
+                            +--> Log Result
+
+       |
+       v
+
+Return number of rows processed

@@ -1,0 +1,111 @@
+RAISERS EDGE TO SNOWFLAKE (DEV) - SOURCE TABLES AND TARGET TABLES
+==================================================================
+Source: AUDIT_DB.CONFIG.PIPELINE_METADATA rows saved in "Raisers Source Data.csv".
+ADF is a black box. Every one of the 72 rows is SOURCE_TYPE = SQLSERVER, LOAD_TYPE = FULL, ENABLED = TRUE.
+Target rule: source T_<Name>  ->  Snowflake table  RAISERS_EDGE.STG_T_<NAME IN CAPITALS>
+
+
+  +---------------------------+     +---------------+     +-----------------------------------+
+  | RAISERS EDGE DATABASE     |     | ADF           |     | SNOWFLAKE                         |
+  | (SQL Server)              |     | (black box)   |     | schema RAISERS_EDGE               |
+  |                           | --> | full copy of  | --> |                                   |
+  | 72 source tables          |     | each table    |     | 72 landing tables                 |
+  | T_<Name>                  |     |               |     | STG_T_<NAME>                      |
+  +---------------------------+     +---------------+     +-----------------------------------+
+                                                                          |
+                                                                          v
+                                          +------------------------------------------------------+
+                                          | [step not seen] fills ODS_T_* from STG_T_*           |
+                                          | RAW_PROD.RAISERS_EDGE.ODS_T_*  (has IS_DELETED)      |
+                                          |   -> VW_ODS_T_*  WHERE NOT IS_DELETED  [VERIFIED DDL]|
+                                          |   -> SP_ETL_RAISERS_EDGE -> STANDARDISED_RECORDS     |
+                                          |   -> match -> golden                                 |
+                                          +------------------------------------------------------+
+
+
+THE 72 SOURCE TABLES AND THEIR TARGETS
+--------------------------------------
+  * = read by the daily MDM (SP_ETL_RAISERS_EDGE)      Source (SQL Server)                     Target (Snowflake RAISERS_EDGE)
+
+     1  T_ActionAttributes                        -->  STG_T_ACTIONATTRIBUTES
+     2  T_ActionCanvassers                        -->  STG_T_ACTIONCANVASSERS
+     3  T_ActionNotes                             -->  STG_T_ACTIONNOTES
+     4  T_ActionNotesDelta                        -->  STG_T_ACTIONNOTESDELTA
+     5  T_Actions                                 -->  STG_T_ACTIONS
+     6  T_ActionsDelta                            -->  STG_T_ACTIONSDELTA
+     7  T_AddressAreas                            -->  STG_T_ADDRESSAREAS
+     8  T_Addresses                         *     -->  STG_T_ADDRESSES
+     9  T_AddressesDelta                          -->  STG_T_ADDRESSESDELTA
+    10  T_Appeals                                 -->  STG_T_APPEALS
+    11  T_Areas                                   -->  STG_T_AREAS
+    12  T_AreaTypes                               -->  STG_T_AREATYPES
+    13  T_AutismProfessionalClientAgeGroups       -->  STG_T_AUTISMPROFESSIONALCLIENTAGEGROUPS
+    14  T_AutismProfessionals                     -->  STG_T_AUTISMPROFESSIONALS
+    15  T_AutismProfessionalWorkSectors           -->  STG_T_AUTISMPROFESSIONALWORKSECTORS
+    16  T_Campaigns                               -->  STG_T_CAMPAIGNS
+    17  T_CashPayments                            -->  STG_T_CASHPAYMENTS
+    18  T_CashPaymentSplits                       -->  STG_T_CASHPAYMENTSPLITS
+    19  T_CodeDescriptions                        -->  STG_T_CODEDESCRIPTIONS
+    20  T_Complaints                              -->  STG_T_COMPLAINTS
+    21  T_Constituent                       *     -->  STG_T_CONSTITUENT
+    22  T_ConstituentAddressAttributes            -->  STG_T_CONSTITUENTADDRESSATTRIBUTES
+    23  T_ConstituentAddresses              *     -->  STG_T_CONSTITUENTADDRESSES
+    24  T_ConstituentAliases                      -->  STG_T_CONSTITUENTALIASES
+    25  T_ConstituentAppeals                      -->  STG_T_CONSTITUENTAPPEALS
+    26  T_ConstituentAttributes             *     -->  STG_T_CONSTITUENTATTRIBUTES
+    27  T_ConstituentConnectionWithAutism         -->  STG_T_CONSTITUENTCONNECTIONWITHAUTISM
+    28  T_ConstituentNotes                        -->  STG_T_CONSTITUENTNOTES
+    29  T_ConstituentSalutation_Extracts          -->  STG_T_CONSTITUENTSALUTATION_EXTRACTS
+    30  T_ConstituentSalutation_Extracts_Events   -->  STG_T_CONSTITUENTSALUTATION_EXTRACTS_EVENTS
+    31  T_ConstituentSalutation_Extracts_Tasks    -->  STG_T_CONSTITUENTSALUTATION_EXTRACTS_TASKS
+    32  T_ConstituentSalutations                  -->  STG_T_CONSTITUENTSALUTATIONS
+    33  T_ConstituentSolicitCodes           *     -->  STG_T_CONSTITUENTSOLICITCODES
+    34  T_ConstituentTypes                  *     -->  STG_T_CONSTITUENTTYPES
+    35  T_ContactPermissions                      -->  STG_T_CONTACTPERMISSIONS
+    36  T_EmailAddresses                    *     -->  STG_T_EMAILADDRESSES
+    37  T_EmailCommunications                     -->  STG_T_EMAILCOMMUNICATIONS
+    38  T_EventAttributes                         -->  STG_T_EVENTATTRIBUTES
+    39  T_EventParticipantAttributes              -->  STG_T_EVENTPARTICIPANTATTRIBUTES
+    40  T_EventParticipantFees                    -->  STG_T_EVENTPARTICIPANTFEES
+    41  T_EventParticipantGifts                   -->  STG_T_EVENTPARTICIPANTGIFTS
+    42  T_EventParticipants                       -->  STG_T_EVENTPARTICIPANTS
+    43  T_EventPrices                             -->  STG_T_EVENTPRICES
+    44  T_Events                                  -->  STG_T_EVENTS
+    45  T_Funds                                   -->  STG_T_FUNDS
+    46  T_GiftAttributes                          -->  STG_T_GIFTATTRIBUTES
+    47  T_Gifts                             *     -->  STG_T_GIFTS
+    48  T_GiftSplits                              -->  STG_T_GIFTSPLITS
+    49  T_Membership                              -->  STG_T_MEMBERSHIP
+    50  T_MembershipAttributes                    -->  STG_T_MEMBERSHIPATTRIBUTES
+    51  T_MembershipGifts                         -->  STG_T_MEMBERSHIPGIFTS
+    52  T_Packages                                -->  STG_T_PACKAGES
+    53  T_PhoneNumbers                      *     -->  STG_T_PHONENUMBERS
+    54  T_PledgeGifts                             -->  STG_T_PLEDGEGIFTS
+    55  T_Pledges                                 -->  STG_T_PLEDGES
+    56  T_PledgeSplits                            -->  STG_T_PLEDGESPLITS
+    57  T_ProposalAttributes                      -->  STG_T_PROPOSALATTRIBUTES
+    58  T_ProposalNotes                           -->  STG_T_PROPOSALNOTES
+    59  T_Proposals                               -->  STG_T_PROPOSALS
+    60  T_Prospects                               -->  STG_T_PROSPECTS
+    61  T_RegularGiving                           -->  STG_T_REGULARGIVING
+    62  T_RegularGivingGifts                      -->  STG_T_REGULARGIVINGGIFTS
+    63  T_RegularGivingSplits                     -->  STG_T_REGULARGIVINGSPLITS
+    64  T_Relationships                           -->  STG_T_RELATIONSHIPS
+    65  T_SoftCredits                             -->  STG_T_SOFTCREDITS
+    66  T_TableDeltas                             -->  STG_T_TABLEDELTAS
+    67  T_TaxDeclarations                         -->  STG_T_TAXDECLARATIONS
+    68  T_TEMP_ProfAttr                           -->  STG_T_TEMP_PROFATTR
+    69  T_TributeAcknowledgees                    -->  STG_T_TRIBUTEACKNOWLEDGEES
+    70  T_Tributes                                -->  STG_T_TRIBUTES
+    71  T_Volunteers                              -->  STG_T_VOLUNTEERS
+    72  T_WebAddresses                            -->  STG_T_WEBADDRESSES
+
+
+  NOTES
+   - Staging folder for each table: raisers_edge/<source name in lower case>/  e.g. raisers_edge/t_gifts/
+   - Landing is a full reload each run; the extract shows no delta column for these tables.
+   - The code reads VW_ODS_T_*, not STG_T_*. Verified for T_ActionAttributes (run in DEV): the view selects from
+     RAW_PROD.RAISERS_EDGE.ODS_T_ACTIONATTRIBUTES WHERE NOT IS_DELETED, with columns passed through unchanged.
+   - ASSUMED for now: DEV's view layer reads PROD-named raw data (not a clean DEV/PROD separation).
+   - The step that fills ODS_T_* from STG_T_* is not in the exports.
+   - Marked * are the 9 tables the daily MDM procedure reads (through VW_ODS_T_<NAME>).

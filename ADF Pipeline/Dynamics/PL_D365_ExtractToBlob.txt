@@ -1,0 +1,265 @@
+High-level narrative
+
+This ADF pipeline is a metadata-driven Dynamics 365 (Dataverse) extraction framework.
+
+It reads a list of entities from a Snowflake metadata table and, for each enabled entity:
+
+Validates pipeline parameters.
+Retrieves configuration and current watermark values.
+Skips entities that have failed too many times (circuit breaker).
+Marks the entity as RUNNING.
+Extracts data from Dynamics 365 via REST API.
+Writes the data as compressed JSON (.json.gz) into Azure Blob Storage.
+If it is a DELTA load, advances the watermark to the latest value found in Dataverse.
+If it is a FULL load, leaves the watermark unchanged.
+Records success or failure in Snowflake.
+On failure, rolls the watermark back and increments the failure counter.
+
+In short:
+
+Snowflake metadata controls what to extract, ADF pulls data from Dynamics 365, stores it in Blob Storage, and maintains load state and watermarks in Snowflake.
+
+Notepad-style Flow Diagram
++------------------------------------------------------+
+| PL_D365_ExtractToBlob                                |
+| Metadata Driven Dynamics 365 Extract                 |
++------------------------------------------------------+
+
+         |
+         v
+
++--------------------------+
+| Validate EntityScope     |
+| DATA / METADATA / ALL    |
++--------------------------+
+         |
+         +--------------------+
+         | Invalid            |
+         v                    |
++--------------------------+  |
+| FAIL Pipeline            |  |
++--------------------------+  |
+                              |
+                              v
+
++----------------------------------------------+
+| Read Metadata From Snowflake                 |
+| AUDIT_DB.CONFIG.PIPELINE_METADATA            |
+| + PIPELINE_WATERMARK                         |
++----------------------------------------------+
+
+Returned per entity:
+  - ENTITY_ID
+  - SOURCE_TABLE
+  - LOAD_TYPE
+  - DELTA_COLUMN
+  - WATERMARK
+  - STAGING_PATH
+  - EXECUTION_ORDER
+
+         |
+         v
+
++-----------------------------------+
+| Circuit Breaker Filter            |
+| Ignore entities where             |
+| failures >= threshold (default 5) |
++-----------------------------------+
+
+         |
+         v
+
++-----------------------------------------+
+| ForEach Entity                          |
+| Parallel Processing (batchCount = 8)    |
++-----------------------------------------+
+
+         |
+         v
+
++------------------------------------------+
+| Mark Entity RUNNING                      |
+| Snowflake Watermark Table                |
+|                                          |
+| Save PREVIOUS_WATERMARK                  |
+| Store Start Time                         |
+| Store Run Id                             |
++------------------------------------------+
+
+         |
+         v
+
++-----------------------------------------+
+| Extract Data From Dataverse             |
+| REST API                                |
+| Managed Identity Authentication         |
+| RFC5988 Pagination (@odata.nextLink)    |
++-----------------------------------------+
+
+         |
+         v
+
++-----------------------------------------+
+| Write JSON.GZ To Blob                   |
++-----------------------------------------+
+
+Blob Path Example
+
+/dynamics-api/
+      202611/
+      20261108/
+      14/
+      account_20261108_142530.json.gz
+
+
+         |
+         v
+
++------------------------+
+| LOAD_TYPE ?            |
++------------------------+
+      |
+      +--------------------+
+      |                    |
+      v                    v
+
+   DELTA                 FULL
+
+      |                    |
+      |                    |
+      v                    v
+
++------------------+   +------------------+
+| Get Current Max  |   | Mark Success     |
+| Watermark From   |   |                  |
+| Dataverse        |   | Watermark stays  |
++------------------+   | unchanged        |
+      |                +------------------+
+      v
+
++--------------------------------+
+| Update Watermark Table         |
+|                                |
+| WATERMARK_VALUE = MAX(column)  |
+| FAILURES = 0                   |
+| STATUS = SUCCESS               |
++--------------------------------+
+
+         |
+         v
+
+      COMPLETED
+
+
+Failure Path
+============
+
+If Copy Activity Fails:
+
++----------------------------------+
+| Mark Failed                      |
++----------------------------------+
+
+Actions:
+  - STATUS = FAILED
+  - WATERMARK = PREVIOUS_WATERMARK
+  - FAILURES += 1
+  - Store Error Message
+  - Store End Time
+  - Store Run Id
+
+         |
+         v
+
+   Entity Ends
+
+Conceptual Architecture
+                  +-------------------+
+                  | Snowflake Config  |
+                  |-------------------|
+                  | PIPELINE_METADATA |
+                  | PIPELINE_WATERMARK|
+                  +---------+---------+
+                            |
+                            |
+                            v
+
+                  +-------------------+
+                  |      ADF          |
+                  | Orchestration     |
+                  +----+---------+----+
+                       |         |
+                       |         |
+                       v         v
+
+            +----------------+   +----------------+
+            | Dataverse / D365|  | Azure Blob     |
+            | REST API        |  | Storage        |
+            +--------+--------+  +--------+-------+
+                     |                    ^
+                     |                    |
+                     +------JSON----------+
+
+
+Key Design Strengths
+✅ Metadata Driven
+
+Adding a new D365 entity usually requires:
+
+Insert row into PIPELINE_METADATA
+
+
+No pipeline change required.
+
+✅ Incremental Loads
+
+Uses:
+
+$filter=<delta_column> gt <watermark>
+
+
+Example:
+
+modifiedon gt 2026-11-07T00:00:00Z
+
+
+Only changed records are extracted.
+
+✅ Circuit Breaker
+
+After repeated failures (default 5):
+
+CONSECUTIVE_FAILURES >= 5
+
+
+Entity is skipped automatically.
+
+Prevents one broken entity from constantly failing every run.
+
+✅ Watermark Recovery
+
+Before starting:
+
+PREVIOUS_WATERMARK = WATERMARK_VALUE
+
+
+If extraction fails:
+
+WATERMARK_VALUE = PREVIOUS_WATERMARK
+
+
+This prevents data loss.
+
+✅ Parallelism
+Pipeline concurrency = 1
+ForEach batchCount = 8
+
+---  Note this is good because at a later date Snowflake can extract from the Blob. 
+
+Meaning:
+
+Only one pipeline execution can run at a time.
+Inside that execution, up to 8 entities can be extracted concurrently.
+One-line summary for documentation
+
+PL_D365_ExtractToBlob is a metadata-driven Azure Data Factory pipeline that incrementally or fully extracts Dynamics 365 (Dataverse) entities via REST APIs into Azure Blob Storage as compressed JSON files, while managing execution state, watermarks, retries, and circuit-breaker logic in Snowflake.

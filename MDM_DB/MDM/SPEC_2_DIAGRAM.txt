@@ -1,0 +1,180 @@
+SPEC 2 - DYNAMICS MIGRATION: SNOWFLAKE BUILD (UP TO THE ADF HAND-OFF)
+=====================================================================
+Companion to SPEC_2_DYNAMICS_MIGRATION_SNOWFLAKE_BUILD.md
+(DRAFT. Counts from the mapping workbook are approximate.)
+
+
+1. THE BIG PICTURE - WHAT IS IN AND OUT OF SCOPE
+------------------------------------------------
+
+  +----------------+      +-------------------------------------------+      +-----------+      +-----------+
+  | Raisers Edge   | ---> |              SNOWFLAKE                    | ---> |    ADF    | ---> | Dynamics  |
+  | (legacy CRM,   |      |        (THIS SPEC COVERS THIS BOX)        |      | (moves    |      | 365 (via  |
+  | static at      |      |                                           |      |  data     |      | landing   |
+  | go-live)       |      |  RAW -> STANDARDISE -> MDM -> PAYLOADS    |      |  only)    |      | zone/API) |
+  +----------------+      +-------------------------------------------+      +-----------+      +-----------+
+                                       ^                                           |
+                                       |        result rows: success / failure     |
+                                       +------------- + Dynamics ID ---------------+
+
+  OUT OF SCOPE: ADF pipelines, the Dynamics landing zone, HubSpot refresh.
+
+
+2. THE HAND-OFF CONTRACT (THE "UP UNTIL ADF" LINE)
+--------------------------------------------------
+
+  Snowflake gives ADF, per Dynamics entity:            ADF gives Snowflake back:
+
+  +--------------------------------------+             +---------------------------------+
+  | entity | POST or PATCH | key         |             | row key | success / failure     |
+  | JSON body | hold reason | batch id   |  ------->   | error text | Dynamics ID        |
+  | (max 2,000 rows per entity per run)  |             | (stored in the state table)     |
+  +--------------------------------------+             +---------------------------------+
+
+
+3. TWO FLOWS (THE MAIN IDEA OF THE SPEC)
+----------------------------------------
+
+  +------------------------------------------+   +------------------------------------------+
+  | FLOW A - SUPPORTERS                      |   | FLOW B - TRANSACTIONS AND REFERENCE DATA |
+  | Contact, Organisation, Address, Consent, |   | Gifts, Payment Schedules, Direct Debits, |
+  | Relationship, Title, Connection          |   | Events, Participants, Membership, Tax,   |
+  |                                          |   | Appeals, Packages, Campaigns             |
+  |------------------------------------------|   |------------------------------------------|
+  | Goes through the MDM (de-duplicate)      |   | Does NOT go through the MDM              |
+  | Runs DAILY, continues after go-live      |   | ONE-OFF migration (trial loads, fixes,   |
+  | Needs Spec 1 (Raisers Edge removal)      |   | final delta, then static)                |
+  | Mostly mapped (Contact ~63/73 required   |   | About half mapped (Transaction 16/35,    |
+  | fields have a source)                    |   | Participant 10/34, Tax 1/14)             |
+  +--------------------+---------------------+   +---------------------+--------------------+
+                       |                                               ^
+                       |   Dynamics ID of each supporter               |
+                       +-----------------------------------------------+
+                       Flow B needs Flow A first: a gift cannot be loaded
+                       until its supporter exists in Dynamics.
+
+
+4. DATA PATH INSIDE SNOWFLAKE
+-----------------------------
+
+     RAW layer                 Standardise            Match / Golden           Payloads
+  +---------------+        +---------------+      +----------------+      +--------------------+
+  | RAW.RAISERS_  |        | MDM_DB.       |      | Match groups   |      | Payload views /    |
+  | EDGE  (RE)    | -----> | STAGING.      | ---> | Golden records | ---> | dynamic tables     |
+  | RAW.HUBSPOT   |  FLOW  | STANDARDISED_ |  A   | XREF           |      | one per entity     |
+  | RAW.DYNAMICS  |  A     | RECORDS       |      | Crosswalk      |      +---------+----------+
+  +-------+-------+        +---------------+      +----------------+                ^
+          |                                                                          |
+          |  FLOW B skips standardise and the MDM:                                   |
+          +--------------------------------------------------------------------------+
+            RE tables -> mapping rules -> payload views (supporter ID via crosswalk)
+            NOTE: RE raw = STG_T_* (ADF, 72 tables) -> ODS_T_* (writer unseen) -> VW_ODS_T_*.
+            Existing VW_D365_* views already read VW_ODS_T_* directly [EXPORT].
+
+  Shared by both flows:
+
+  +------------------------+  +------------------------+  +-----------------------------+
+  | MAPPING tables         |  | VW_MIGRATION_SCOPE     |  | LOAD GATES                  |
+  | (workbook loaded into  |  | (cut-off rules, one    |  | (hold rows with open        |
+  | Snowflake, gap report) |  |  place - BLOCKER: the  |  |  questions; HOLD_REASON =   |
+  |                        |  |  sheet is blank)       |  |  GATE:<code>)               |
+  +------------------------+  +------------------------+  +-----------------------------+
+  +------------------------+  +------------------------+
+  | REFERENCE / lookup     |  | STATE table + QUALITY  |
+  | tables (gift code, pay |  | checks + exceptions    |
+  | type, option sets)     |  | table + reconciliation |
+  +------------------------+  +------------------------+
+
+
+5. LOAD ORDER (EACH STEP RELEASED ONLY WHEN THE PREVIOUS ONE RECONCILES)
+------------------------------------------------------------------------
+
+   1. Reference and lookup data
+        |
+   2. People and organisations (Flow A)  --> Dynamics ID written back
+        |
+   3. Address, consent, relationships
+        |
+   4. Events, then participants
+        |
+   5. Payment schedules, direct debits
+        |
+   6. Transactions and lines, restrictions, tributes, soft credits
+        |
+   7. Tax declarations (Gift Aid window rule still ASSUMED)
+        |
+   8. Memberships, commitments, enquiries
+        |
+   9. Final delta load at cut-over, then FREEZE Raisers Edge
+
+
+6. WHERE THE MAPPING WORKBOOK STANDS (REQUIRED FIELDS ONLY)
+-----------------------------------------------------------
+
+   About 4,000 Dynamics fields in the workbook
+        |
+        +--> about 460 required for migration
+                  |
+                  +--> about 260 have a source written down   (~56%)
+                  +--> about 200 have NO source               (~44%)   <-- the gap
+                       (some may be covered by the 72 RE tables ADF already lands; to check)
+
+   Entity                   required / with a source
+   -------------------------------------------------
+   Contact                      73 / 63    ##########-
+   Organisation                 26 / 24    #########--
+   Transaction                  35 / 16    ####-------
+   Event                        29 / 14    #####------
+   Event Participant            34 / 10    ###--------
+   Enquiry                      22 /  5    ##---------
+   Tax Declaration              14 /  1    #----------
+   Membership                   14 /  1    #----------
+
+   Other blanks: cut-off criteria, gift splits, gift code decisions.
+
+
+7. PHASES
+---------
+
+  PHASE 0            PHASE 1             PHASE 2              PHASE 3            PHASE 4
+  Verify live,       Spec 1 changes,     Flow B entities      Dress rehearsal,   Retire RE feeds
+  load mapping,      Flow A in TEST,     in load order,       PROD deploy,       and old code
+  gap report,        reference data      each reconciled      final delta,
+  cut-off rules                          in TEST              freeze
+  (2 - 3 wks*)       ------------->      ------------->       ------------->     ------------->
+
+  * Effort is in person-days, not calendar time - see the estimate below.
+
+
+8. ACCEPTANCE CHECKS
+--------------------
+
+  Mapping complete  -->  Row counts reconcile  -->  Gift totals match RE
+        |                                                  |
+        v                                                  v
+  Every supporter resolves  -->  No duplicates  -->  Re-run sends nothing new
+                                                           |
+                                                           v
+                                   Sample review + dress rehearsal in Dynamics test
+
+
+9. ESTIMATE (ROUGH)
+-------------------
+
+  Spec 2 alone ............ 32 - 59 person-days
+  Spec 1 alone ............ 17 - 32 person-days
+  Combined (overlap once) . about 45 - 80 person-days
+
+  Falls towards the low end if NAS or the partner close the mapping gaps first.
+  Flow A and the Flow B reference data can run in parallel with two engineers.
+
+
+10. TOP RISKS / DECISIONS NEEDED FROM NAS
+-----------------------------------------
+
+  [!] Mapping called "done" but about 44% of required fields have no source
+  [!] Cut-off criteria blank  (which contacts and organisations move)
+  [!] Gift splits and gift codes unresolved
+  [!] Raisers Edge ID link lost when RE is removed (see Spec 1)
+  [!] Dynamics objects exist in DEV only, not in the TEST/PROD exports
+  [!] Who builds it is undecided
