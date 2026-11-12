@@ -323,3 +323,43 @@ FROM (SELECT PAYLOAD FROM INTEGRATION_DB.DYNAMICS.VW_D365_CONNECTION LIMIT 1000)
 -- 8 INFO: repeat run gives the same count (idempotent)
 SELECT COUNT(*) AS RUN_A FROM INTEGRATION_DB.DYNAMICS.VW_D365_CONNECTION;
 SELECT COUNT(*) AS RUN_B FROM INTEGRATION_DB.DYNAMICS.VW_D365_CONNECTION;
+
+
+
+Create 
+
+Edit 
+
+I've written the tests in `TEST_VW_D365_CONNECTION.sql`, next to your copy of the view. I haven't run them, because I can't reach Snowflake. Run each block on its own.
+
+**How the tests work**
+- **PASS/FAIL blocks** return `RESULT = 'PASS'` or `'FAIL'` with the counts behind it.
+- **INFO blocks** return numbers or sample rows for you to read and record.
+
+| Test | Type | What it checks |
+|---|---|---|
+| 1.1 and 1.2 | PASS/FAIL | No row without a second person, and no self links. |
+| 1.3 and 1.4 | INFO | View row count (expect about 110k to 150k) and the 211,206 dropped source rows. |
+| 2.1 | PASS/FAIL | No pair appears twice. |
+| 2.2 | PASS/FAIL | Every mirrored pair in the source gives exactly one view row. |
+| 2.3 | INFO | Pairs with different link types, and which row was kept. |
+| 2.4 | PASS/FAIL | When one mirror has roles and the other has none, the row with roles is kept. |
+| 3.1–3.3 | PASS/FAIL, INFO | Dates parse by length (8, 6 and 4 digits), plus a sample to check by eye. |
+| 3.4 | PASS/FAIL | Unparseable start dates become NULL. |
+| 3.5 | INFO | Rows where the end date is before the start. |
+| 4.1, 4.2, 4.4 | INFO | Record types, a hand trace of the ID lookup, and how many rows have no Dynamics ID. |
+| 4.3 | PASS/FAIL | A person with several RE IDs resolves to one Dynamics ID. |
+| 5.1–5.2 | PASS/FAIL | Role IDs match `VW_ODS_CONNECTIONROLES`, ignoring case and padding (Role1 only). |
+| 5.3 and 5.4 | INFO | Roles RE has that Dynamics lacks, and rows with a blank role. |
+| 6.1 | INFO | `LOAD_ACTION` and `HOLD_REASON` counts (expect all `HOLD`). |
+| 6.2 and 6.3 | PASS/FAIL | `HOLD` rows have a reason and `CREATE` rows don't. |
+| 6.4 | MANUAL | Shows the open gates. Testing the `CREATE` path needs a scratch copy of the view with the gates removed. |
+| 6.5 and 6.6 | PASS/FAIL | The canvasser flag and GDPR suppression always produce a hold. |
+| 7 | PASS/FAIL, INFO | The payload is a JSON object, `statecode` is right, and the keys are listed. |
+| 8 | INFO | Two runs give the same count. |
+
+**Limits**
+- 5.1 and 5.2 only check Role1. Role2 uses the same join, so it should behave the same, but it isn't covered.
+- Test 7 checks the shape, not whether the key names are right for the Dynamics API. That still needs the Dynamics team.
+- Test 4.3's SQL is long. If it is slow, run it on a sample.
+- I haven't tested these queries, so a typo is possible. Paste any error and I'll fix it.

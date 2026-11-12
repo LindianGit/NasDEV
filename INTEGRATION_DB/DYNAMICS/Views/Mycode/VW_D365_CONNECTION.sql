@@ -198,6 +198,7 @@ SELECT
         'record2objecttypecode', RECORD2_TYPE,
         'record2id', RECORD2_D365_ID,
         'record2roleid', ROLE2_D365_ID,
+        'description', ROLE1_NAME,
         'effectivestart', TO_VARCHAR(EFFECTIVE_START, 'YYYY-MM-DD'),
         'effectiveend', TO_VARCHAR(EFFECTIVE_END, 'YYYY-MM-DD'),
         'statecode', IFF(EFFECTIVE_END IS NULL, 0, 1)
