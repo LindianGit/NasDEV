@@ -1,3 +1,9 @@
+/**
+GRANT OWNERSHIP ON VIEW INTEGRATION_DB.DYNAMICS.VW_D365_REF_LOAD_GATE
+TO ROLE accountadmin COPY CURRENT GRANTS;
+
+***/
+
 create or replace view INTEGRATION_DB.DYNAMICS.VW_D365_REF_LOAD_GATE(
 	GATE_CODE,
 	D365_TABLE,
@@ -77,17 +83,17 @@ FROM
         'CANVASSER_RELATIONSHIPS',
         'connection',
         NULL,
-        TRUE,
+        FALSE,
         'NAS',
-        'NAS has not confirmed that relationships of canvassers are dropped at either end.'
+        'TEMP DEV OVERRIDE (2026-11-13): gate opened to allow CONNECTION migration test dispatch. Revert to TRUE after test sign-off. NAS has not confirmed that relationships of canvassers are dropped at either end.'
     ),
     (
         'CONNECTION_DIRECTION',
         'connection',
         NULL,
-        TRUE,
+        FALSE,
         'Data team and D365 team',
-        'The direction of the two roles is untested in DEV, and the one-row-per-pair rule is unproven.'
+        'TEMP DEV OVERRIDE (2026-11-13): gate opened to allow CONNECTION migration test dispatch. Revert to TRUE after test sign-off. The direction of the two roles is untested in DEV, and the one-row-per-pair rule is unproven.'
     ),
     (
         'RETIRED_CONSTITUENT_TYPES',

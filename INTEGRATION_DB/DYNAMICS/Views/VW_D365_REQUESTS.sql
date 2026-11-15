@@ -26,6 +26,15 @@ create or replace view INTEGRATION_DB.DYNAMICS.VW_D365_REQUESTS(
 -- attempt was retryable, or PAYLOAD_MD5 has changed since. PRIORITY orders
 -- never-sent, retryable, then changed; QUALIFY caps each entity at 2000
 -- rows independently.
+--
+-- Plain-English summary for non-technical readers:
+-- This view is the "outbox" for ADF. If a row appears here, the pipeline will
+-- try to send it to Dataverse. If a row does not appear here, ADF will never
+-- see it.
+--
+-- Contact and Account rows come from dynamic payload tables.
+-- Connection rows come directly from VW_D365_CONNECTION because Connections are
+-- currently create-only in this design (no PATCH path is modelled yet).
 WITH CONTACT_CTE AS (
     SELECT
         M.PIPELINE_ID,
@@ -104,10 +113,64 @@ ACCOUNT_CTE AS (
         )
 ),
 
+-- CONNECTION entity hand-off for ADF.
+-- Why this CTE exists:
+-- 1) FE_ProcessEntities in ADF loops metadata entities.
+-- 2) The child dispatch pipeline only sends rows returned by VW_D365_REQUESTS.
+-- 3) Therefore, adding CONNECTION here is required before pipeline runs can
+--    ever send connection payloads to Dataverse.
+--
+-- Design notes:
+-- - Connections are emitted as POST only (create).
+-- - HOLD rows are excluded; only actionable CREATE rows are emitted.
+-- - We manufacture a stable string key for state tracking:
+--       'CONNECTION:' || RE_RELATIONSHIP_ID
+--   This plays the same role GOLDEN_RECORD_ID plays for Contact/Account.
+CONNECTION_CTE AS (
+    SELECT
+        M.PIPELINE_ID,
+        M.SOURCE_INSTANCE,
+        M.ENTITY_ID,
+        'CONNECTION:' || TO_VARCHAR(CN.RE_RELATIONSHIP_ID) AS GOLDEN_RECORD_ID,
+        CAST(NULL AS VARCHAR) AS TARGET_GUID,
+        'POST' AS HTTP_METHOD,
+        M.API_BASE_URL || '/connections' AS REQUEST_URL,
+        CN.PAYLOAD AS REQUEST_BODY,
+        M.AUTH_METHOD,
+        M.AUTH_CONFIG,
+        MD5(TO_VARCHAR(CN.PAYLOAD)) AS PAYLOAD_MD5,
+        CASE
+            WHEN S.GOLDEN_RECORD_ID IS NULL THEN 1
+            WHEN S.IS_RETRYABLE THEN 2
+            ELSE 3
+        END AS PRIORITY
+    FROM AUDIT_DB.CONFIG.PIPELINE_METADATA AS M
+    INNER JOIN INTEGRATION_DB.DYNAMICS.VW_D365_CONNECTION AS CN
+        ON 1 = 1
+    LEFT JOIN AUDIT_DB.MONITORING.D365_WRITEBACK_STATE AS S
+        ON
+            S.GOLDEN_RECORD_ID =
+            'CONNECTION:' || TO_VARCHAR(CN.RE_RELATIONSHIP_ID)
+            AND S.ENTITY_ID = 'CONNECTION'
+    WHERE
+        M.PIPELINE_ID = 'D365_WRITEBACK'
+        AND M.ENTITY_ID = 'CONNECTION'
+        AND M.ENABLED = TRUE
+        AND CN.LOAD_ACTION = 'CREATE'
+        AND CN.HOLD_REASON IS NULL
+        AND (
+            S.GOLDEN_RECORD_ID IS NULL
+            OR S.IS_RETRYABLE
+            OR S.LAST_PAYLOAD_MD5 IS DISTINCT FROM MD5(TO_VARCHAR(CN.PAYLOAD))
+        )
+),
+
 COMBINED_CTE AS (
     SELECT * FROM CONTACT_CTE
     UNION ALL
     SELECT * FROM ACCOUNT_CTE
+    UNION ALL
+    SELECT * FROM CONNECTION_CTE
 )
 
 SELECT

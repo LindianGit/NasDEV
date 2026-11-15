@@ -231,3 +231,496 @@ SNOWFLAKE VIEW
        v
 
 Return number of rows processed
+
+Below is the Azure code
+
+{
+    "name": "PL_D365_DispatchRequests",
+    "properties": {
+        "description": "Child pipeline called by PL_D365_Writeback once per entity. Reads pending requests from VW_D365_REQUESTS and dispatches each to the Dataverse Web API. Authenticates via the factory managed identity (Application User in D365) -- no OAuth token is required or passed in. A successful POST's GUID is captured into XREF via SP_XREF_CAPTURE_D365_ID before being logged as a success; a POST that succeeds but whose XREF capture fails is logged as XREF_CAPTURE_FAILED, never a plain success. Every outcome is logged via SP_D365_LOG_RESPONSE, including a best-effort parse of the real HTTP status out of a failed WebActivity error message.",
+        "activities": [
+            {
+                "name": "LKP_GetRequests",
+                "description": "Fetches all pending API writeback requests for this entity from VW_D365_REQUESTS. Each row is one POST or PATCH call, already capped at 2000 rows per entity by the view itself. Plain English: this is the inbox for the sender. If a row is not in VW_D365_REQUESTS, it will not be sent.",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "SnowflakeV2Source",
+                        "query": {
+                            "value": "SELECT\n    pipeline_id,\n    source_instance,\n    entity_id,\n    golden_record_id,\n    target_guid,\n    http_method,\n    request_url,\n    request_body,\n    payload_md5\nFROM INTEGRATION_DB.DYNAMICS.VW_D365_REQUESTS\nWHERE pipeline_id = '@{pipeline().parameters.PipelineId}'\n    AND source_instance = '@{pipeline().parameters.SourceInstance}'\n    AND entity_id = '@{pipeline().parameters.EntityId}'@{if(greater(pipeline().parameters.TestRowsPerCombo, 0), concat('\nQUALIFY ROW_NUMBER() OVER (PARTITION BY HTTP_METHOD ORDER BY GOLDEN_RECORD_ID) <= ', string(pipeline().parameters.TestRowsPerCombo)), '')}",
+                            "type": "Expression"
+                        },
+                        "exportSettings": {
+                            "type": "SnowflakeExportCopyCommand"
+                        },
+                        "treatDecimalAsString": true
+                    },
+                    "dataset": {
+                        "referenceName": "DS_Snowflake_Metadata",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "FE_ApiRequests",
+                "description": "Iterates over each pending request row. Non-sequential with batchCount 5, bounded by Dataverse's 52-concurrent-request service-protection limit. Each iteration calls IF_PostOrPatch to dispatch the correct HTTP verb; ADF acquires a Dataverse token per call using the factory managed identity.",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "LKP_GetRequests",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('LKP_GetRequests').output.value",
+                        "type": "Expression"
+                    },
+                    "isSequential": false,
+                    "batchCount": 5,
+                    "activities": [
+                        {
+                            "name": "IF_PostOrPatch",
+                            "description": "Branches on HTTP_METHOD: POST to create a new row, PATCH to update an existing row. This logic is entity-agnostic (Contact, Account, and Connection can all pass through if present in VW_D365_REQUESTS).",
+                            "type": "IfCondition",
+                            "dependsOn": [],
+                            "userProperties": [],
+                            "typeProperties": {
+                                "expression": {
+                                    "value": "@equals(item().HTTP_METHOD, 'POST')",
+                                    "type": "Expression"
+                                },
+                                "ifFalseActivities": [
+                                    {
+                                        "name": "WEB_Patch",
+                                        "description": "Updates an existing contact/account via PATCH. Authenticates via managed identity against the Dataverse resource.",
+                                        "type": "WebActivity",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "timeout": "0.00:02:00",
+                                            "retry": 0,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": true,
+                                            "secureInput": true
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "method": "PATCH",
+                                            "headers": {
+                                                "Accept": "application/json",
+                                                "Content-Type": "application/json",
+                                                "OData-MaxVersion": "4.0",
+                                                "OData-Version": "4.0"
+                                            },
+                                            "url": {
+                                                "value": "@{item().REQUEST_URL}",
+                                                "type": "Expression"
+                                            },
+                                            "body": {
+                                                "value": "@{item().REQUEST_BODY}",
+                                                "type": "Expression"
+                                            },
+                                            "authentication": {
+                                                "resource": "https://nasdatamig.crm11.dynamics.com",
+                                                "credential": {
+                                                    "referenceName": "cred-mi-prod-df",
+                                                    "type": "CredentialReference"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "name": "SCR_LogPatchSuccess",
+                                        "description": "Dataverse returns 204 No Content on a successful PATCH.",
+                                        "type": "Script",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "WEB_Patch",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "LS_Snowflake",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "NonQuery",
+                                                    "text": {
+                                                        "value": "CALL AUDIT_DB.MONITORING.SP_D365_LOG_RESPONSE('@{item().GOLDEN_RECORD_ID}', '@{item().ENTITY_ID}', '@{item().PAYLOAD_MD5}', 204, NULL, NULL, '@{pipeline().RunId}');",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    },
+                                    {
+                                        "name": "SET_BuildPatchFailedLogSQL",
+                                        "description": "Builds the SP_D365_LOG_RESPONSE call as a single string via @concat, avoiding the ADF expression parser issues around mixed quoting and unmatched parens in inline @{} expressions. Uses substring(...,0,3) rather than split(...,' (') to sidestep the parser choking on the literal '(' in the split delimiter.",
+                                        "type": "SetVariable",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "WEB_Patch",
+                                                "dependencyConditions": [
+                                                    "Failed"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "variableName": "sql_log_patch_failed",
+                                            "value": {
+                                                "value": "@concat('CALL AUDIT_DB.MONITORING.SP_D365_LOG_RESPONSE(''', item().GOLDEN_RECORD_ID, ''', ''', item().ENTITY_ID, ''', ''', item().PAYLOAD_MD5, ''', ', if(contains(activity('WEB_Patch').error.message, ' indicate success: '), substring(split(activity('WEB_Patch').error.message, ' indicate success: ')[1], 0, 3), 'NULL'), ', ''', if(contains(activity('WEB_Patch').error.message, ' indicate success: '), concat('HTTP_', substring(split(activity('WEB_Patch').error.message, ' indicate success: ')[1], 0, 3)), if(contains(toLower(string(activity('WEB_Patch').error.message)), 'timeout'), 'TIMEOUT', 'WEB_ACTIVITY_FAILED')), ''', ''', replace(string(activity('WEB_Patch').error.message), '''', ''''''), ''', ''', pipeline().RunId, ''');')",
+                                                "type": "Expression"
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "name": "SCR_LogPatchFailed",
+                                        "description": "Executes the CALL built in SET_BuildPatchFailedLogSQL. Parses the real HTTP status out of ADF's WebActivity failure message when present; falls back to a text heuristic otherwise.",
+                                        "type": "Script",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "SET_BuildPatchFailedLogSQL",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "LS_Snowflake",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "NonQuery",
+                                                    "text": {
+                                                        "value": "@variables('sql_log_patch_failed')",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    }
+                                ],
+                                "ifTrueActivities": [
+                                    {
+                                        "name": "WEB_Post",
+                                        "description": "Creates a new Dataverse row via POST (for example Contact, Account, or Connection). Prefer: return=representation plus ?$select carries the new GUID in the response body, since WebActivity can't read response headers. Authenticates via managed identity against the Dataverse resource.",
+                                        "type": "WebActivity",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "timeout": "0.00:02:00",
+                                            "retry": 0,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": true,
+                                            "secureInput": true
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "method": "POST",
+                                            "headers": {
+                                                "Accept": "application/json",
+                                                "Content-Type": "application/json",
+                                                "OData-MaxVersion": "4.0",
+                                                "OData-Version": "4.0",
+                                                "Prefer": "return=representation"
+                                            },
+                                            "url": {
+                                                "value": "@{concat(item().REQUEST_URL, '?$select=', if(equals(item().ENTITY_ID, 'CONTACT'), 'contactid', if(equals(item().ENTITY_ID, 'ACCOUNT'), 'accountid', if(equals(item().ENTITY_ID, 'CONNECTION'), 'connectionid', 'accountid'))))}",
+                                                "type": "Expression"
+                                            },
+                                            "body": {
+                                                "value": "@{item().REQUEST_BODY}",
+                                                "type": "Expression"
+                                            },
+                                            "authentication": {
+                                                "resource": "https://nasdatamig.crm11.dynamics.com",
+                                                "credential": {
+                                                    "referenceName": "cred-mi-prod-df",
+                                                    "type": "CredentialReference"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "name": "SCR_CAPTURE_XREF",
+                                        "description": "Writes the new Dataverse GUID into Snowflake tracking so future runs know this row has already been created. Plain English: this prevents creating duplicates on the next run.",
+                                        "type": "Script",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "WEB_Post",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "LS_Snowflake",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "NonQuery",
+                                                    "text": {
+                                                        "value": "CALL MDM_DB.GOLD.SP_XREF_CAPTURE_D365_ID('@{item().GOLDEN_RECORD_ID}', '@{activity('WEB_Post').output[if(equals(item().ENTITY_ID, 'CONTACT'), 'contactid', if(equals(item().ENTITY_ID, 'ACCOUNT'), 'accountid', if(equals(item().ENTITY_ID, 'CONNECTION'), 'connectionid', 'accountid')))]}', '@{item().ENTITY_ID}');",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    },
+                                    {
+                                        "name": "SCR_LogPostSuccess",
+                                        "description": "Dataverse returns 201 Created on a successful POST with Prefer: return=representation.",
+                                        "type": "Script",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "SCR_CAPTURE_XREF",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "LS_Snowflake",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "NonQuery",
+                                                    "text": {
+                                                        "value": "CALL AUDIT_DB.MONITORING.SP_D365_LOG_RESPONSE('@{item().GOLDEN_RECORD_ID}', '@{item().ENTITY_ID}', '@{item().PAYLOAD_MD5}', 201, NULL, NULL, '@{pipeline().RunId}');",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    },
+                                    {
+                                        "name": "SCR_LogXrefCaptureFailed",
+                                        "description": "POST succeeded but XREF capture failed. Logged non-retryable so this never re-POSTs; RAW.DYNAMICS ingestion reconciles the GUID later.",
+                                        "type": "Script",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "SCR_CAPTURE_XREF",
+                                                "dependencyConditions": [
+                                                    "Failed"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "LS_Snowflake",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "NonQuery",
+                                                    "text": {
+                                                        "value": "CALL AUDIT_DB.MONITORING.SP_D365_LOG_RESPONSE('@{item().GOLDEN_RECORD_ID}', '@{item().ENTITY_ID}', '@{item().PAYLOAD_MD5}', 201, 'XREF_CAPTURE_FAILED', '@{replace(string(activity('SCR_CAPTURE_XREF').error.message), '''', '''''')}', '@{pipeline().RunId}');",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    },
+                                    {
+                                        "name": "SET_BuildPostFailedLogSQL",
+                                        "description": "Builds the SP_D365_LOG_RESPONSE call as a single string via @concat, avoiding the ADF expression parser issues around mixed quoting and unmatched parens in inline @{} expressions.",
+                                        "type": "SetVariable",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "WEB_Post",
+                                                "dependencyConditions": [
+                                                    "Failed"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "variableName": "sql_log_post_failed",
+                                            "value": {
+                                                "value": "@concat('CALL AUDIT_DB.MONITORING.SP_D365_LOG_RESPONSE(''', item().GOLDEN_RECORD_ID, ''', ''', item().ENTITY_ID, ''', ''', item().PAYLOAD_MD5, ''', ', if(contains(activity('WEB_Post').error.message, ' indicate success: '), substring(split(activity('WEB_Post').error.message, ' indicate success: ')[1], 0, 3), 'NULL'), ', ''', if(contains(activity('WEB_Post').error.message, ' indicate success: '), concat('HTTP_', substring(split(activity('WEB_Post').error.message, ' indicate success: ')[1], 0, 3)), if(contains(toLower(string(activity('WEB_Post').error.message)), 'timeout'), 'TIMEOUT', 'WEB_ACTIVITY_FAILED')), ''', ''', replace(string(activity('WEB_Post').error.message), '''', ''''''), ''', ''', pipeline().RunId, ''');')",
+                                                "type": "Expression"
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "name": "SCR_LogPostFailed",
+                                        "description": "Executes the CALL built in SET_BuildPostFailedLogSQL. Parses the real HTTP status out of ADF's WebActivity failure message when present; falls back to a text heuristic otherwise.",
+                                        "type": "Script",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "SET_BuildPostFailedLogSQL",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "LS_Snowflake",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "NonQuery",
+                                                    "text": {
+                                                        "value": "@variables('sql_log_post_failed')",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "SET_ReturnVars",
+                "description": "Returns the row count this run attempted, so the caller's watermark reflects real activity, not a backlog re-query.",
+                "type": "SetVariable",
+                "dependsOn": [
+                    {
+                        "activity": "FE_ApiRequests",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "variableName": "pipelineReturnValue",
+                    "value": [
+                        {
+                            "key": "rowsDispatched",
+                            "value": {
+                                "type": "Expression",
+                                "content": "@length(activity('LKP_GetRequests').output.value)"
+                            }
+                        }
+                    ],
+                    "setSystemVariable": true
+                }
+            }
+        ],
+        "parameters": {
+            "PipelineId": {
+                "type": "string"
+            },
+            "SourceInstance": {
+                "type": "string"
+            },
+            "EntityId": {
+                "type": "string"
+            },
+            "TestRowsPerCombo": {
+                "type": "int",
+                "defaultValue": 0
+            }
+        },
+        "variables": {
+            "sql_log_patch_failed": {
+                "type": "String"
+            },
+            "sql_log_post_failed": {
+                "type": "String"
+            }
+        },
+        "folder": {
+            "name": "Dynamics"
+        },
+        "annotations": [],
+        "lastPublishTime": "2026-10-27T09:59:09Z"
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}

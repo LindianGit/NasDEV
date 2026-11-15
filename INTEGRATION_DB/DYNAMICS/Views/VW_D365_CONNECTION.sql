@@ -157,12 +157,17 @@ RESOLVED AS (
 REASONED AS (
     SELECT
         *,
+        -- TEMP DEV GUARD (2026-11-13): hold any account-involved connection until
+        -- Dataverse Connection Role object-type compatibility is configured.
+        -- This avoids API errors like:
+        -- "record of type account is not defined for use with connection role ..."
         NULLIF(
             ARRAY_TO_STRING(
                 ARRAY_CONSTRUCT_COMPACT(
                     IFF(GATE_CODES IS NOT NULL, 'GATE:' || GATE_CODES, NULL),
                     IFF(IS_SUPPRESSED, 'GDPR_SUPPRESSED', NULL),
                     IFF(IS_CANVASSER, 'CANVASSER', NULL),
+                    IFF(RECORD1_TYPE = 'account' OR RECORD2_TYPE = 'account', 'ACCOUNT_ROLE_COMPATIBILITY_PENDING', NULL),
                     IFF(RECORD1_D365_ID IS NULL, 'NO_D365_ID_RECORD1', NULL),
                     IFF(RECORD2_D365_ID IS NULL, 'NO_D365_ID_RECORD2', NULL),
                     IFF(ROLE1_NAME IS NULL, 'NO_ROLE1', IFF(ROLE1_D365_ID IS NULL, 'ROLE1_NOT_IN_D365', NULL)),
@@ -191,16 +196,20 @@ SELECT
     EFFECTIVE_END,
     IFF(HOLD_REASON IS NULL, 'CREATE', 'HOLD') AS LOAD_ACTION,
     HOLD_REASON,
-    OBJECT_CONSTRUCT(
-        'record1objecttypecode', RECORD1_TYPE,
-        'record1id', RECORD1_D365_ID,
-        'record1roleid', ROLE1_D365_ID,
-        'record2objecttypecode', RECORD2_TYPE,
-        'record2id', RECORD2_D365_ID,
-        'record2roleid', ROLE2_D365_ID,
-        'description', ROLE1_NAME,
-        'effectivestart', TO_VARCHAR(EFFECTIVE_START, 'YYYY-MM-DD'),
-        'effectiveend', TO_VARCHAR(EFFECTIVE_END, 'YYYY-MM-DD'),
-        'statecode', IFF(EFFECTIVE_END IS NULL, 0, 1)
+    OBJECT_INSERT(
+        OBJECT_INSERT(
+            OBJECT_CONSTRUCT(
+                'record1roleid@odata.bind', '/connectionroles(' || ROLE1_D365_ID || ')',
+                'record2roleid@odata.bind', '/connectionroles(' || ROLE2_D365_ID || ')',
+                'description', ROLE1_NAME,
+                'effectivestart', TO_VARCHAR(EFFECTIVE_START, 'YYYY-MM-DD'),
+                'effectiveend', TO_VARCHAR(EFFECTIVE_END, 'YYYY-MM-DD'),
+                'statecode', IFF(EFFECTIVE_END IS NULL, 0, 1)
+            ),
+            IFF(RECORD1_TYPE = 'contact', 'record1id_contact@odata.bind', 'record1id_account@odata.bind'),
+            IFF(RECORD1_TYPE = 'contact', '/contacts(' || RECORD1_D365_ID || ')', '/accounts(' || RECORD1_D365_ID || ')')
+        ),
+        IFF(RECORD2_TYPE = 'contact', 'record2id_contact@odata.bind', 'record2id_account@odata.bind'),
+        IFF(RECORD2_TYPE = 'contact', '/contacts(' || RECORD2_D365_ID || ')', '/accounts(' || RECORD2_D365_ID || ')')
     ) AS PAYLOAD
 FROM REASONED;
