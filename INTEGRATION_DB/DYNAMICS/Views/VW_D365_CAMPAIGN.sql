@@ -114,7 +114,9 @@ SELECT
         'expectedrevenue', EXPECTEDREVENUE,
         'name', NAME,
         'statecode', STATECODE,
-        'statuscode', STATUSCODE
+        'statuscode', STATUSCODE,
+        'mha_source', 'Raisers Edge',
+        'mha_sourceid', TO_VARCHAR(RE_CAMPAIGN_ID),
     ) AS PAYLOAD,
     ACTUALEND,
     ACTUALSTART,

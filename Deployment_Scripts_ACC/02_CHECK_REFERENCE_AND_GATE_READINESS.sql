@@ -1,0 +1,30 @@
+-- Read-only checks. Run in ACC after the views are deployed and the ACC
+-- Dataverse extracts are refreshed. CREATE means missing from the extract,
+-- not necessarily missing from Dataverse if the extract is stale.
+
+SELECT 'TITLE' AS OBJECT_NAME, LOAD_ACTION, COUNT(*) AS ROW_COUNT
+FROM INTEGRATION_DB.DYNAMICS.VW_D365_MHA_TITLE
+GROUP BY LOAD_ACTION
+UNION ALL
+SELECT 'RELATIONSHIP_TYPE', LOAD_ACTION, COUNT(*)
+FROM INTEGRATION_DB.DYNAMICS.VW_D365_MHA_RELATIONSHIPTYPE
+GROUP BY LOAD_ACTION
+ORDER BY OBJECT_NAME, LOAD_ACTION;
+
+-- Review the missing or held values with the reference-data owner before load.
+SELECT RE_TITLE, LOAD_ACTION, HOLD_REASON
+FROM INTEGRATION_DB.DYNAMICS.VW_D365_MHA_TITLE
+WHERE LOAD_ACTION <> 'EXISTS'
+ORDER BY RE_TITLE;
+
+SELECT RE_CONSTITUENT_TYPE, LOAD_ACTION, HOLD_REASON
+FROM INTEGRATION_DB.DYNAMICS.VW_D365_MHA_RELATIONSHIPTYPE
+WHERE LOAD_ACTION <> 'EXISTS'
+ORDER BY RE_CONSTITUENT_TYPE;
+
+-- The repository's Connection gate view contains temporary DEV overrides.
+-- Confirm ACC decisions separately; do not assume the DEV overrides are approved.
+SELECT GATE_CODE, D365_TABLE, IS_OPEN, OWNER, DESCRIPTION
+FROM INTEGRATION_DB.DYNAMICS.VW_D365_REF_LOAD_GATE
+WHERE D365_TABLE = 'connection'
+ORDER BY GATE_CODE;
