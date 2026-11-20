@@ -230,7 +230,7 @@
                                                 "Prefer": "return=representation"
                                             },
                                             "url": {
-                                                "value":  "@{concat(item().REQUEST_URL, '?$select=', if(equals(item().ENTITY_ID, 'CONTACT'), 'contactid', if(equals(item().ENTITY_ID, 'ACCOUNT'), 'accountid', if(equals(item().ENTITY_ID, 'CONNECTION'), 'connectionid', if(equals(item().ENTITY_ID, 'CAMPAIGN'), 'campaignid', 'accountid')))))}",                                                
+                                                "value": "@{concat(item().REQUEST_URL, '?$select=', if(equals(item().ENTITY_ID, 'CONTACT'), 'contactid', if(equals(item().ENTITY_ID, 'ACCOUNT'), 'accountid', if(equals(item().ENTITY_ID, 'CONNECTION'), 'connectionid', if(equals(item().ENTITY_ID, 'CAMPAIGN'), 'campaignid', if(equals(item().ENTITY_ID, 'DESIGNATION'), 'msnfp_designationid', if(equals(item().ENTITY_ID, 'MEMBERSHIP'), 'msnfp_membershipid', 'accountid')))))))}",
                                                 "type": "Expression"
                                             },
                                             "body": {
@@ -275,7 +275,7 @@
                                                 {
                                                     "type": "NonQuery",
                                                     "text": {
-                                                        "value": "CALL MDM_DB.GOLD.SP_XREF_CAPTURE_D365_ID('@{item().GOLDEN_RECORD_ID}', '@{activity('WEB_Post').output[if(equals(item().ENTITY_ID, 'CONTACT'), 'contactid', if(equals(item().ENTITY_ID, 'ACCOUNT'), 'accountid', if(equals(item().ENTITY_ID, 'CONNECTION'), 'connectionid', if(equals(item().ENTITY_ID, 'CAMPAIGN'), 'campaignid', 'accountid'))))]}', '@{item().ENTITY_ID}');",
+                                                        "value": "CALL MDM_DB.GOLD.SP_XREF_CAPTURE_D365_ID('@{item().GOLDEN_RECORD_ID}', '@{activity('WEB_Post').output[if(equals(item().ENTITY_ID, 'CONTACT'), 'contactid', if(equals(item().ENTITY_ID, 'ACCOUNT'), 'accountid', if(equals(item().ENTITY_ID, 'CONNECTION'), 'connectionid', if(equals(item().ENTITY_ID, 'CAMPAIGN'), 'campaignid', if(equals(item().ENTITY_ID, 'DESIGNATION'), 'msnfp_designationid', if(equals(item().ENTITY_ID, 'MEMBERSHIP'), 'msnfp_membershipid', 'accountid'))))))]}', '@{item().ENTITY_ID}');",
                                                         "type": "Expression"
                                                     }
                                                 }

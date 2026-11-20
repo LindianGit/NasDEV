@@ -1,0 +1,414 @@
+{
+    "name": "PL_D365_ExtractToBlob",
+    "properties": {
+        "description": "Metadata-driven D365 (Dataverse) REST extract to Azure Blob, reading from AUDIT_DB.CONFIG.PIPELINE_METADATA. For each enabled REST entity (SOURCE_TYPE='REST'): applies circuit breaker, marks RUNNING, extracts from Dataverse to JSON.gz in blob under STAGING_PATH (DELTA rows filter by <QUERY_PARAMETERS> gt <watermark>; FULL rows pull everything), then advances the watermark (DELTA only). Auth via factory managed identity (Application User in D365) -- no OAuth token step. Pagination via RFC 5988. concurrency: 1 so overlapping runs can't both see the same entity as pending. Ordered by EXECUTION_ORDER, ENTITY_ID.",
+        "activities": [
+            {
+                "name": "IF_ValidateScope",
+                "description": "Fails the run at the start when EntityScope is not DATA, METADATA or ALL (case-insensitive).",
+                "type": "IfCondition",
+                "dependsOn": [],
+                "userProperties": [],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@contains(createArray('DATA', 'METADATA', 'ALL'), toUpper(pipeline().parameters.EntityScope))",
+                        "type": "Expression"
+                    },
+                    "ifFalseActivities": [
+                        {
+                            "name": "FAIL_InvalidScope",
+                            "type": "Fail",
+                            "dependsOn": [],
+                            "userProperties": [],
+                            "typeProperties": {
+                                "message": {
+                                    "value": "@concat('EntityScope ''', pipeline().parameters.EntityScope, ''' is not valid. Use DATA, METADATA or ALL.')",
+                                    "type": "Expression"
+                                },
+                                "errorCode": "INVALID_ENTITY_SCOPE"
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "LKP_GetConfig",
+                "description": "Reads REST pipeline configuration and current watermark state. Filters SOURCE_TYPE='REST' so this pipeline only picks up D365 REST rows even if the metadata table grows to hold other source types.",
+                "type": "Lookup",
+                "dependsOn": [
+                    {
+                        "activity": "IF_ValidateScope",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "SnowflakeV2Source",
+                        "query": {
+                            "value": "SELECT\n    m.PIPELINE_ID,\n    m.SOURCE_INSTANCE,\n    m.ENTITY_ID,\n    m.LOAD_TYPE,\n    m.SOURCE_TABLE,\n    m.QUERY_PARAMETERS AS DELTA_COLUMN,\n    m.STAGING_PATH,\n    m.EXECUTION_ORDER,\n    COALESCE(w.WATERMARK_VALUE, '') AS WATERMARK_VALUE,\n    COALESCE(w.CONSECUTIVE_FAILURES, 0) AS CONSECUTIVE_FAILURES\nFROM AUDIT_DB.CONFIG.PIPELINE_METADATA m\nLEFT JOIN AUDIT_DB.CONFIG.PIPELINE_WATERMARK w\n    ON m.PIPELINE_ID = w.PIPELINE_ID\n    AND m.SOURCE_INSTANCE = w.SOURCE_INSTANCE\n    AND m.ENTITY_ID = w.ENTITY_ID\nWHERE m.PIPELINE_ID = '@{pipeline().parameters.PipelineId}'\n    AND m.SOURCE_INSTANCE = '@{pipeline().parameters.SourceInstance}'\n    AND m.SOURCE_TYPE = 'REST'\n    AND m.ENABLED = TRUE\n    AND CASE '@{toUpper(pipeline().parameters.EntityScope)}' WHEN 'ALL' THEN TRUE WHEN 'METADATA' THEN STARTSWITH(m.ENTITY_ID, 'META_') ELSE NOT STARTSWITH(m.ENTITY_ID, 'META_') END\nORDER BY m.EXECUTION_ORDER, m.ENTITY_ID",
+                            "type": "Expression"
+                        },
+                        "exportSettings": {
+                            "type": "SnowflakeExportCopyCommand"
+                        }
+                    },
+                    "dataset": {
+                        "referenceName": "DS_Snowflake_Metadata",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "FLT_CircuitBreaker",
+                "description": "Excludes any entity whose consecutive failure count has reached the CircuitBreakerThreshold.",
+                "type": "Filter",
+                "dependsOn": [
+                    {
+                        "activity": "LKP_GetConfig",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('LKP_GetConfig').output.value",
+                        "type": "Expression"
+                    },
+                    "condition": {
+                        "value": "@or(empty(item().CONSECUTIVE_FAILURES), less(int(item().CONSECUTIVE_FAILURES), pipeline().parameters.CircuitBreakerThreshold))",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "FE_ProcessEntities",
+                "description": "Iterates over each entity that passed the circuit-breaker filter. Sequential for the first stable release given 80+ entities and Dataverse's service-protection limits; bump batchCount once you know the throughput headroom.",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "FLT_CircuitBreaker",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('FLT_CircuitBreaker').output.Value",
+                        "type": "Expression"
+                    },
+                    "isSequential": false,
+                    "batchCount": 8,
+                    "activities": [
+                        {
+                            "name": "SCR_MarkRunning",
+                            "description": "Upserts the watermark record for this entity to RUNNING and saves PREVIOUS_WATERMARK for rollback on failure.",
+                            "type": "Script",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "linkedServiceName": {
+                                "referenceName": "LS_Snowflake",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "MERGE INTO AUDIT_DB.CONFIG.PIPELINE_WATERMARK AS tgt\nUSING (SELECT '@{item().PIPELINE_ID}' AS PIPELINE_ID, '@{item().SOURCE_INSTANCE}' AS SOURCE_INSTANCE, '@{item().ENTITY_ID}' AS ENTITY_ID) AS src\n    ON tgt.PIPELINE_ID = src.PIPELINE_ID AND tgt.SOURCE_INSTANCE = src.SOURCE_INSTANCE AND tgt.ENTITY_ID = src.ENTITY_ID\nWHEN MATCHED THEN UPDATE SET\n    PREVIOUS_WATERMARK = tgt.WATERMARK_VALUE,\n    LAST_RUN_STATUS = 'RUNNING',\n    LAST_RUN_START = CURRENT_TIMESTAMP(),\n    LAST_RUN_ID = '@{pipeline().RunId}',\n    MODIFIED = CURRENT_TIMESTAMP()\nWHEN NOT MATCHED THEN INSERT (\n    PIPELINE_ID, SOURCE_INSTANCE, ENTITY_ID, WATERMARK_VALUE, PREVIOUS_WATERMARK,\n    LAST_RUN_STATUS, CONSECUTIVE_FAILURES, LAST_RUN_ROWS, LAST_RUN_START, LAST_RUN_ID,\n    CREATED, MODIFIED\n) VALUES (\n    '@{item().PIPELINE_ID}', '@{item().SOURCE_INSTANCE}', '@{item().ENTITY_ID}', NULL, NULL,\n    'RUNNING', 0, 0, CURRENT_TIMESTAMP(), '@{pipeline().RunId}',\n    CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP()\n);",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "02:00:00"
+                            }
+                        },
+                        {
+                            "name": "CPY_ExtractToBlob",
+                            "description": "Extracts records from Dataverse REST and writes JSON.gz to blob at STAGING_PATH. Pagination automatic via RFC 5988 (@odata.nextLink). Auth via managed identity on LS_D365_REST.",
+                            "type": "Copy",
+                            "dependsOn": [
+                                {
+                                    "activity": "SCR_MarkRunning",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.02:00:00",
+                                "retry": 1,
+                                "retryIntervalInSeconds": 60,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "source": {
+                                    "type": "RestSource",
+                                    "httpRequestTimeout": "00:05:00",
+                                    "requestInterval": "00.00:00:00.200",
+                                    "requestMethod": "GET",
+                                    "additionalHeaders": {
+                                        "OData-MaxVersion": "4.0",
+                                        "OData-Version": "4.0",
+                                        "Accept": "application/json;odata.metadata=none",
+                                        "Prefer": "odata.include-annotations=\"-*\",odata.maxpagesize=5000"
+                                    },
+                                    "paginationRules": {
+                                        "AbsoluteUrl": "$['@odata.nextLink']"
+                                    }
+                                },
+                                "sink": {
+                                    "type": "JsonSink",
+                                    "storeSettings": {
+                                        "type": "AzureBlobStorageWriteSettings",
+                                        "copyBehavior": "PreserveHierarchy"
+                                    },
+                                    "formatSettings": {
+                                        "type": "JsonWriteSettings"
+                                    }
+                                },
+                                "enableStaging": false
+                            },
+                            "inputs": [
+                                {
+                                    "referenceName": "DS_D365_REST",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "relativeUrl": {
+                                            "value": "@if(and(equals(item().LOAD_TYPE, 'DELTA'), not(empty(item().WATERMARK_VALUE))), concat(item().SOURCE_TABLE, '?$filter=', item().DELTA_COLUMN, ' gt ', item().WATERMARK_VALUE), item().SOURCE_TABLE)",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ],
+                            "outputs": [
+                                {
+                                    "referenceName": "DS_Blob_Staging_JSON",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "FolderPath": {
+                                            "value": "@concat(toLower(replace(item().PIPELINE_ID, '_', '-')), '/', formatDateTime(utcNow(), 'yyyyMM'), '/', formatDateTime(utcNow(), 'yyyyMMdd'), '/', formatDateTime(utcNow(), 'HH'))",
+                                            "type": "Expression"
+                                        },
+                                        "FileName": {
+                                            "value": "@toLower(concat(item().ENTITY_ID, '_', formatDateTime(utcNow(), 'yyyyMMdd_HHmmss'), '.json.gz'))",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "name": "IF_IsDelta",
+                            "description": "Branches on LOAD_TYPE. True (DELTA) path advances the watermark via a REST probe against Dataverse. False (FULL) path marks success without touching the watermark.",
+                            "type": "IfCondition",
+                            "dependsOn": [
+                                {
+                                    "activity": "CPY_ExtractToBlob",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "userProperties": [],
+                            "typeProperties": {
+                                "expression": {
+                                    "value": "@and(equals(item().LOAD_TYPE, 'DELTA'), not(empty(item().DELTA_COLUMN)))",
+                                    "type": "Expression"
+                                },
+                                "ifFalseActivities": [
+                                    {
+                                        "name": "SCR_MarkSuccessFull",
+                                        "description": "Marks success for FULL loads. WATERMARK_VALUE unchanged.",
+                                        "type": "Script",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "LS_Snowflake",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "NonQuery",
+                                                    "text": {
+                                                        "value": "UPDATE AUDIT_DB.CONFIG.PIPELINE_WATERMARK\nSET LAST_RUN_STATUS = 'SUCCESS',\n    LAST_RUN_ROWS = @{activity('CPY_ExtractToBlob').output.rowsCopied},\n    LAST_RUN_END = CURRENT_TIMESTAMP(),\n    CONSECUTIVE_FAILURES = 0,\n    LAST_ERROR_MESSAGE = NULL,\n    LAST_RUN_ID = '@{pipeline().RunId}',\n    MODIFIED = CURRENT_TIMESTAMP()\nWHERE PIPELINE_ID = '@{item().PIPELINE_ID}'\n    AND SOURCE_INSTANCE = '@{item().SOURCE_INSTANCE}'\n    AND ENTITY_ID = '@{item().ENTITY_ID}';",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    }
+                                ],
+                                "ifTrueActivities": [
+                                    {
+                                        "name": "WEB_GetMaxWatermark",
+                                        "description": "Probes Dataverse for the current max value of the delta column using $orderby desc + $top=1.",
+                                        "type": "WebActivity",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "method": "GET",
+                                            "headers": {
+                                                "Accept": "application/json;odata.metadata=none",
+                                                "OData-MaxVersion": "4.0",
+                                                "OData-Version": "4.0"
+                                            },
+                                            "url": {
+                                                "value": "@concat('https://nasdatamig.crm11.dynamics.com/api/data/v9.2/', item().SOURCE_TABLE, '?$select=', item().DELTA_COLUMN, '&$orderby=', item().DELTA_COLUMN, ' desc&$top=1')",
+                                                "type": "Expression"
+                                            },
+                                            "authentication": {
+                                                "resource": "https://nasdatamig.crm11.dynamics.com",
+                                                "credential": {
+                                                    "referenceName": "cred-mi-prod-df",
+                                                    "type": "CredentialReference"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "name": "SCR_MarkSuccessDelta",
+                                        "description": "Marks success and advances WATERMARK_VALUE to the max returned by WEB_GetMaxWatermark.",
+                                        "type": "Script",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "WEB_GetMaxWatermark",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "LS_Snowflake",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "NonQuery",
+                                                    "text": {
+                                                        "value": "UPDATE AUDIT_DB.CONFIG.PIPELINE_WATERMARK\nSET LAST_RUN_STATUS = 'SUCCESS',\n    WATERMARK_VALUE = COALESCE(NULLIF('@{if(greater(length(activity('WEB_GetMaxWatermark').output.value), 0), string(activity('WEB_GetMaxWatermark').output.value[0][item().DELTA_COLUMN]), '')}', ''), WATERMARK_VALUE),\n    LAST_RUN_ROWS = @{activity('CPY_ExtractToBlob').output.rowsCopied},\n    LAST_RUN_END = CURRENT_TIMESTAMP(),\n    CONSECUTIVE_FAILURES = 0,\n    LAST_ERROR_MESSAGE = NULL,\n    LAST_RUN_ID = '@{pipeline().RunId}',\n    MODIFIED = CURRENT_TIMESTAMP()\nWHERE PIPELINE_ID = '@{item().PIPELINE_ID}'\n    AND SOURCE_INSTANCE = '@{item().SOURCE_INSTANCE}'\n    AND ENTITY_ID = '@{item().ENTITY_ID}';",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "name": "SCR_MarkFailed",
+                            "description": "Rolls WATERMARK_VALUE back to PREVIOUS_WATERMARK, increments CONSECUTIVE_FAILURES, stores the actual extract error message.",
+                            "type": "Script",
+                            "dependsOn": [
+                                {
+                                    "activity": "CPY_ExtractToBlob",
+                                    "dependencyConditions": [
+                                        "Failed"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "linkedServiceName": {
+                                "referenceName": "LS_Snowflake",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "UPDATE AUDIT_DB.CONFIG.PIPELINE_WATERMARK\nSET LAST_RUN_STATUS = 'FAILED',\n    WATERMARK_VALUE = PREVIOUS_WATERMARK,\n    CONSECUTIVE_FAILURES = CONSECUTIVE_FAILURES + 1,\n    LAST_ERROR_MESSAGE = LEFT('@{replace(coalesce(activity('CPY_ExtractToBlob').error.message, ''), '''', '''''')}', 4000),\n    LAST_RUN_END = CURRENT_TIMESTAMP(),\n    LAST_RUN_ID = '@{pipeline().RunId}',\n    MODIFIED = CURRENT_TIMESTAMP()\nWHERE PIPELINE_ID = '@{item().PIPELINE_ID}'\n    AND SOURCE_INSTANCE = '@{item().SOURCE_INSTANCE}'\n    AND ENTITY_ID = '@{item().ENTITY_ID}';",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "02:00:00"
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "concurrency": 1,
+        "parameters": {
+            "PipelineId": {
+                "type": "string",
+                "defaultValue": "DYNAMICS_API"
+            },
+            "SourceInstance": {
+                "type": "string",
+                "defaultValue": "D365_API"
+            },
+            "CircuitBreakerThreshold": {
+                "type": "int",
+                "defaultValue": 5
+            },
+            "EntityScope": {
+                "type": "string",
+                "defaultValue": "DATA"
+            }
+        },
+        "folder": {
+            "name": "Dynamics"
+        },
+        "annotations": []
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}

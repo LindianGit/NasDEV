@@ -1,0 +1,50 @@
+-- Preparation only: this does not enable Membership writeback.
+DECLARE
+    EXISTING_COUNT NUMBER;
+    SOURCE_COUNT NUMBER;
+    DUPLICATE_METADATA EXCEPTION (-20001, 'Multiple Membership metadata rows exist.');
+    INVALID_TEMPLATE EXCEPTION (-20002, 'Expected exactly one DEV Campaign metadata template.');
+BEGIN
+    SELECT COUNT(*) INTO :EXISTING_COUNT
+    FROM AUDIT_DB.CONFIG.PIPELINE_METADATA
+    WHERE PIPELINE_ID = 'D365_WRITEBACK'
+      AND SOURCE_INSTANCE = 'SNOWFLAKE_DEV'
+      AND ENTITY_ID = 'MEMBERSHIP';
+
+    IF (EXISTING_COUNT > 1) THEN
+        RAISE DUPLICATE_METADATA;
+    END IF;
+    IF (EXISTING_COUNT = 1) THEN
+        RETURN 'Membership metadata already exists; inspect ENABLED and configuration.';
+    END IF;
+
+    SELECT COUNT(*) INTO :SOURCE_COUNT
+    FROM AUDIT_DB.CONFIG.PIPELINE_METADATA
+    WHERE PIPELINE_ID = 'D365_WRITEBACK'
+      AND SOURCE_INSTANCE = 'SNOWFLAKE_DEV'
+      AND ENTITY_ID = 'CAMPAIGN'
+      AND API_BASE_URL = 'https://nasdatamig.crm11.dynamics.com/api/data/v9.2';
+
+    IF (SOURCE_COUNT <> 1) THEN
+        RAISE INVALID_TEMPLATE;
+    END IF;
+
+    INSERT INTO AUDIT_DB.CONFIG.PIPELINE_METADATA (
+        PIPELINE_ID, SOURCE_INSTANCE, ENTITY_ID,
+        SOURCE_TYPE, LOAD_TYPE, API_BASE_URL, AUTH_METHOD, AUTH_CONFIG,
+        TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE,
+        EXECUTION_ORDER, ENABLED, NOTES
+    )
+    SELECT
+        M.PIPELINE_ID, M.SOURCE_INSTANCE, 'MEMBERSHIP',
+        M.SOURCE_TYPE, M.LOAD_TYPE, M.API_BASE_URL, M.AUTH_METHOD, M.AUTH_CONFIG,
+        M.TARGET_DATABASE, M.TARGET_SCHEMA, 'MEMBERSHIP',
+        50, FALSE, 'Membership DEV preparation: disabled pending approval and dispatch safety'
+    FROM AUDIT_DB.CONFIG.PIPELINE_METADATA M
+    WHERE M.PIPELINE_ID = 'D365_WRITEBACK'
+      AND M.SOURCE_INSTANCE = 'SNOWFLAKE_DEV'
+      AND M.ENTITY_ID = 'CAMPAIGN'
+      AND M.API_BASE_URL = 'https://nasdatamig.crm11.dynamics.com/api/data/v9.2';
+
+    RETURN 'Inserted disabled Membership metadata.';
+END;

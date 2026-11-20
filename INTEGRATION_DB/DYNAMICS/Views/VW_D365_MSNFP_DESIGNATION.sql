@@ -121,7 +121,8 @@ SELECT
         'msnfp_restrictiontype', MSNFP_RESTRICTIONTYPE,
         'msnfp_startdate', TO_CHAR(MSNFP_STARTDATE, 'YYYY-MM-DD'),
         'statecode', STATECODE,
-        'statuscode', STATUSCODE
+        'statuscode', STATUSCODE,
+        'mha_source', 'Raisers Edge'
     ) AS PAYLOAD,
     MHA_SOURCEID,
     MSNFP_DESIGNATIONCODE,
