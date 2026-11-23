@@ -1,0 +1,125 @@
+{
+    "name": "PL_D365_GiftWriteback",
+    "properties": {
+        "description": "Processes one RE Gift: create and capture its Transaction before dispatching its Transaction Lines. An existing Transaction is skipped only when the identity table and XREF agree.",
+        "activities": [
+            {
+                "name": "LKP_CapturedTransaction",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": true,
+                    "secureInput": true
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "SnowflakeV2Source",
+                        "query": {
+                            "value": "SELECT I.D365_GUID\nFROM MDM_DB.GOLD.GIFT_D365_IDENTITY AS I\nJOIN MDM_DB.GOLD.XREF AS X\n  ON X.GOLDEN_RECORD_ID = 'TRANSACTION:' || I.SOURCE_RECORD_ID\n AND X.SOURCE_SYSTEM = 'DYNAMICS'\nWHERE I.ENTITY_ID = 'TRANSACTION'\n  AND I.SOURCE_INSTANCE = '@{replace(pipeline().parameters.SourceInstance, '''', '''''')}'\n  AND I.SOURCE_RECORD_ID = '@{replace(pipeline().parameters.GiftId, '''', '''''')}'\nGROUP BY I.D365_GUID\nHAVING COUNT(*) = 1\n   AND COALESCE(COUNT_IF(LOWER(TRIM(X.SOURCE_RECORD_ID)) = I.D365_GUID), 0) = 1",
+                            "type": "Expression"
+                        },
+                        "exportSettings": {
+                            "type": "SnowflakeExportCopyCommand"
+                        }
+                    },
+                    "dataset": {
+                        "referenceName": "DS_Snowflake_Metadata",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "IF_CreateTransaction",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "LKP_CapturedTransaction",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@equals(length(activity('LKP_CapturedTransaction').output.value), 0)",
+                        "type": "Expression"
+                    },
+                    "ifTrueActivities": [
+                        {
+                            "name": "EP_CreateTransaction",
+                            "type": "ExecutePipeline",
+                            "dependsOn": [],
+                            "typeProperties": {
+                                "pipeline": {
+                                    "referenceName": "PL_D365_GiftDispatchRequests",
+                                    "type": "PipelineReference"
+                                },
+                                "waitOnCompletion": true,
+                                "parameters": {
+                                    "SourceInstance": {
+                                        "value": "@pipeline().parameters.SourceInstance",
+                                        "type": "Expression"
+                                    },
+                                    "EntityId": "TRANSACTION",
+                                    "GiftId": {
+                                        "value": "@pipeline().parameters.GiftId",
+                                        "type": "Expression"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "ifFalseActivities": []
+                }
+            },
+            {
+                "name": "EP_CreateTransactionLines",
+                "type": "ExecutePipeline",
+                "dependsOn": [
+                    {
+                        "activity": "IF_CreateTransaction",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "PL_D365_GiftDispatchRequests",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "SourceInstance": {
+                            "value": "@pipeline().parameters.SourceInstance",
+                            "type": "Expression"
+                        },
+                        "EntityId": "DESIGNATEDCREDIT",
+                        "GiftId": {
+                            "value": "@pipeline().parameters.GiftId",
+                            "type": "Expression"
+                        }
+                    }
+                }
+            }
+        ],
+        "concurrency": 1,
+        "parameters": {
+            "SourceInstance": {
+                "type": "string"
+            },
+            "GiftId": {
+                "type": "string"
+            }
+        },
+        "folder": {
+            "name": "Dynamics"
+        },
+        "annotations": []
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}

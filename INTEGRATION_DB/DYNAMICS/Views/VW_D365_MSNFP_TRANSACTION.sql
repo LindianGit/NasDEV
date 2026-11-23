@@ -1,0 +1,359 @@
+  CREATE OR REPLACE VIEW INTEGRATION_DB.DYNAMICS.VW_D365_MSNFP_TRANSACTION AS
+
+WITH GIFT_TYPES AS (
+    SELECT
+        RE_GIFT_TYPE_CODE,
+        MAX(D365_TARGET) AS D365_TARGET,
+        COUNT(DISTINCT D365_TARGET) AS TARGET_COUNT
+    FROM INTEGRATION_DB.DYNAMICS.VW_D365_REF_GIFT_TYPE
+    GROUP BY RE_GIFT_TYPE_CODE
+),
+
+SOURCE_GIFTS AS (
+    SELECT
+        G.*,
+        COUNT(*) OVER (PARTITION BY G.ID) AS GIFT_ID_ROWS
+    FROM RAW.RAISERS_EDGE.VW_ODS_T_GIFTS AS G
+),
+
+GATES AS (
+    SELECT
+        NULLIF(
+            LISTAGG(GATE_CODE, ',') WITHIN GROUP (ORDER BY GATE_CODE),
+            ''
+        ) AS GATE_CODES
+    FROM INTEGRATION_DB.DYNAMICS.VW_D365_REF_LOAD_GATE
+    WHERE D365_TABLE = 'msnfp_transaction'
+      AND IS_OPEN
+      AND ROW_CONDITION_KEY IS NULL
+),
+
+RE_PARTIES AS (
+    SELECT DISTINCT
+        TRIM(X.SOURCE_RECORD_ID) AS RE_CONSTITUENT_ID,
+        X.GOLDEN_RECORD_ID,
+        IDS.IS_GDPR_SUPPRESSED
+    FROM MDM_DB.GOLD.XREF AS X
+    INNER JOIN MDM_DB.GOLD.VW_GOLDEN_RECORD_IDS AS IDS
+        ON X.GOLDEN_RECORD_ID = IDS.GOLDEN_RECORD_ID
+    WHERE X.SOURCE_SYSTEM = 'RAISERS_EDGE'
+      AND NULLIF(TRIM(X.SOURCE_RECORD_ID), '') IS NOT NULL
+),
+
+D365_IDS AS (
+    SELECT
+        GOLDEN_RECORD_ID,
+        COUNT(DISTINCT CASE
+            WHEN STANDARDISED_ID LIKE 'D365-%'
+                THEN NULLIF(TRIM(SOURCE_RECORD_ID), '')
+        END) AS CONTACT_COUNT,
+        MIN(CASE
+            WHEN STANDARDISED_ID LIKE 'D365-%'
+                THEN NULLIF(TRIM(SOURCE_RECORD_ID), '')
+        END) AS CONTACT_ID,
+        COUNT(DISTINCT CASE
+            WHEN STANDARDISED_ID LIKE 'D365C-%'
+                THEN NULLIF(TRIM(SOURCE_RECORD_ID), '')
+        END) AS ACCOUNT_COUNT,
+        MIN(CASE
+            WHEN STANDARDISED_ID LIKE 'D365C-%'
+                THEN NULLIF(TRIM(SOURCE_RECORD_ID), '')
+        END) AS ACCOUNT_ID
+    FROM MDM_DB.GOLD.XREF
+    WHERE STANDARDISED_ID LIKE 'D365-%'
+       OR STANDARDISED_ID LIKE 'D365C-%'
+    GROUP BY GOLDEN_RECORD_ID
+),
+
+PARTIES AS (
+    SELECT
+        R.RE_CONSTITUENT_ID,
+        COUNT(DISTINCT R.GOLDEN_RECORD_ID) AS GOLDEN_RECORD_COUNT,
+        MIN(R.GOLDEN_RECORD_ID) AS GOLDEN_RECORD_ID,
+        MAX(IFF(R.IS_GDPR_SUPPRESSED, 1, 0)) AS IS_SUPPRESSED,
+        SUM(COALESCE(D.CONTACT_COUNT, 0)) AS CONTACT_COUNT,
+        MIN(D.CONTACT_ID) AS CONTACT_ID,
+        SUM(COALESCE(D.ACCOUNT_COUNT, 0)) AS ACCOUNT_COUNT,
+        MIN(D.ACCOUNT_ID) AS ACCOUNT_ID
+    FROM RE_PARTIES AS R
+    LEFT JOIN D365_IDS AS D
+        ON R.GOLDEN_RECORD_ID = D.GOLDEN_RECORD_ID
+    GROUP BY R.RE_CONSTITUENT_ID
+),
+
+SPLIT_SUMMARY AS (
+    SELECT
+        GIFTID,
+        COUNT(*) AS SPLIT_COUNT,
+        SUM(AMOUNT) AS SPLIT_AMOUNT_TOTAL,
+        COUNT(*) - COUNT(AMOUNT) AS SPLITS_WITHOUT_AMOUNT,
+        COUNT(DISTINCT CAMPAIGNCODE) AS CAMPAIGN_COUNT,
+        COUNT(DISTINCT APPEALCODE) AS APPEAL_COUNT,
+        COUNT(DISTINCT PACKAGECODE) AS PACKAGE_COUNT
+    FROM RAW.RAISERS_EDGE.VW_ODS_T_GIFTSPLITS
+    GROUP BY GIFTID
+),
+
+-- Candidates only; historical records may use either Gift ID or Import ID.
+D365_SOURCE_IDS AS (
+    SELECT
+        TRIM(MHA_SOURCEID) AS SOURCE_ID,
+        COUNT(*) AS CANDIDATE_COUNT
+    FROM RAW.DYNAMICS.VW_ODS_MSNFP_TRANSACTIONS
+    WHERE NULLIF(TRIM(MHA_SOURCEID), '') IS NOT NULL
+    GROUP BY TRIM(MHA_SOURCEID)
+),
+
+MAPPED AS (
+    SELECT
+        G.ID AS RE_GIFT_ID,
+        G.GIFT_ID_ROWS,
+        G.CONSTITUENT_ID AS RE_CONSTITUENT_ID,
+        G.GIFTTYPECODE AS RE_GIFT_TYPE_CODE,
+        G.GIFTTYPEDESCRIPTION AS RE_GIFT_TYPE,
+        T.D365_TARGET,
+        T.TARGET_COUNT,
+
+        G.AMOUNT AS RE_AMOUNT,
+        G.GIFTDATE AS RE_GIFT_DATE,
+        G.RECEIPTDATE AS RE_RECEIPT_DATE,
+        G.POSTDATE AS RE_POST_DATE,
+        G.PAYMENTMETHODCODE AS RE_PAYMENT_METHOD_CODE,
+        G.IMPORTID AS RE_IMPORT_ID,
+
+        P.GOLDEN_RECORD_COUNT,
+        P.GOLDEN_RECORD_ID,
+        P.IS_SUPPRESSED,
+        P.CONTACT_COUNT,
+        P.CONTACT_ID,
+        P.ACCOUNT_COUNT,
+        P.ACCOUNT_ID,
+
+        COALESCE(S.SPLIT_COUNT, 0) AS SPLIT_COUNT,
+        S.SPLIT_AMOUNT_TOTAL,
+        COALESCE(S.SPLITS_WITHOUT_AMOUNT, 0) AS SPLITS_WITHOUT_AMOUNT,
+        COALESCE(S.CAMPAIGN_COUNT, 0) AS CAMPAIGN_COUNT,
+        COALESCE(S.APPEAL_COUNT, 0) AS APPEAL_COUNT,
+        COALESCE(S.PACKAGE_COUNT, 0) AS PACKAGE_COUNT,
+
+        IFF(
+            G.ID IS NULL,
+            NULL,
+            COALESCE(BY_GIFT_ID.CANDIDATE_COUNT, 0)
+        ) AS POSSIBLE_MATCHES_BY_GIFT_ID,
+
+        IFF(
+            NULLIF(TRIM(G.IMPORTID), '') IS NULL,
+            NULL,
+            COALESCE(BY_IMPORT_ID.CANDIDATE_COUNT, 0)
+        ) AS POSSIBLE_MATCHES_BY_IMPORT_ID,
+
+        GATES.GATE_CODES
+
+    FROM SOURCE_GIFTS AS G
+    LEFT JOIN GIFT_TYPES AS T
+        ON G.GIFTTYPECODE = T.RE_GIFT_TYPE_CODE
+    LEFT JOIN PARTIES AS P
+        ON TRIM(G.CONSTITUENT_ID) = P.RE_CONSTITUENT_ID
+    LEFT JOIN SPLIT_SUMMARY AS S
+        ON G.ID = S.GIFTID
+    LEFT JOIN D365_SOURCE_IDS AS BY_GIFT_ID
+        ON TO_VARCHAR(G.ID) = BY_GIFT_ID.SOURCE_ID
+    LEFT JOIN D365_SOURCE_IDS AS BY_IMPORT_ID
+        ON TRIM(G.IMPORTID) = BY_IMPORT_ID.SOURCE_ID
+    CROSS JOIN GATES
+    WHERE T.D365_TARGET = 'TRANSACTION'
+       OR T.D365_TARGET IS NULL
+       OR T.TARGET_COUNT > 1
+),
+
+RESOLVED AS (
+    SELECT
+        *,
+        CASE
+            WHEN GOLDEN_RECORD_COUNT = 1
+             AND IS_SUPPRESSED = 0
+             AND CONTACT_COUNT = 1
+             AND ACCOUNT_COUNT = 0
+             AND REGEXP_LIKE(
+                 LOWER(CONTACT_ID),
+                 '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+             )
+                THEN 'contact'
+            WHEN GOLDEN_RECORD_COUNT = 1
+             AND IS_SUPPRESSED = 0
+             AND CONTACT_COUNT = 0
+             AND ACCOUNT_COUNT = 1
+             AND REGEXP_LIKE(
+                 LOWER(ACCOUNT_ID),
+                 '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+             )
+                THEN 'account'
+        END AS DONOR_TYPE,
+
+        -- Preview assumes an ISO date in the first ten characters.
+        TRY_TO_DATE(LEFT(TRIM(RE_GIFT_DATE), 10), 'YYYY-MM-DD')
+            AS BOOK_DATE,
+        TRY_TO_DATE(LEFT(TRIM(RE_RECEIPT_DATE), 10), 'YYYY-MM-DD')
+            AS DEPOSIT_DATE,
+        TRY_TO_DATE(LEFT(TRIM(RE_POST_DATE), 10), 'YYYY-MM-DD')
+            AS POSTED_DATE
+
+    FROM MAPPED
+)
+
+SELECT
+    RE_GIFT_ID,
+    RE_CONSTITUENT_ID,
+    RE_GIFT_TYPE_CODE,
+    RE_GIFT_TYPE,
+    D365_TARGET,
+    RE_AMOUNT,
+    RE_GIFT_DATE,
+    RE_RECEIPT_DATE,
+    RE_POST_DATE,
+    RE_PAYMENT_METHOD_CODE,
+    RE_IMPORT_ID,
+
+    'HOLD' AS LOAD_ACTION,
+
+    ARRAY_TO_STRING(
+        ARRAY_CONSTRUCT_COMPACT(
+            'MAPPING_AND_DISPATCH_SAFETY_PENDING',
+            'EXISTING_TRANSACTION_CHECK_PENDING',
+            'GIFT_AID_RULES_PENDING',
+
+            IFF(RE_GIFT_ID IS NULL, 'GIFT_ID_MISSING', NULL),
+
+            IFF(
+                RE_GIFT_ID IS NOT NULL AND GIFT_ID_ROWS <> 1,
+                'DUPLICATE_GIFT_ID',
+                NULL
+            ),
+
+            IFF(
+                RE_GIFT_TYPE_CODE IS NULL OR D365_TARGET IS NULL,
+                'GIFT_TYPE_UNMAPPED',
+                NULL
+            ),
+
+            IFF(TARGET_COUNT > 1, 'CONFLICTING_GIFT_TYPE_MAP', NULL),
+
+            IFF(RE_AMOUNT IS NULL, 'GIFT_AMOUNT_MISSING', NULL),
+
+            IFF(
+                BOOK_DATE IS NULL,
+                'GIFT_DATE_MISSING_OR_INVALID',
+                NULL
+            ),
+
+            IFF(
+                NULLIF(TRIM(RE_RECEIPT_DATE), '') IS NOT NULL
+                AND DEPOSIT_DATE IS NULL,
+                'RECEIPT_DATE_INVALID',
+                NULL
+            ),
+
+            IFF(
+                NULLIF(TRIM(RE_POST_DATE), '') IS NOT NULL
+                AND POSTED_DATE IS NULL,
+                'POST_DATE_INVALID',
+                NULL
+            ),
+
+            IFF(
+                NULLIF(TRIM(RE_CONSTITUENT_ID), '') IS NULL,
+                'DONOR_CONSTITUENT_ID_MISSING',
+                NULL
+            ),
+
+            IFF(
+                NULLIF(TRIM(RE_CONSTITUENT_ID), '') IS NOT NULL
+                AND GOLDEN_RECORD_COUNT IS NULL,
+                'DONOR_GOLDEN_RECORD_MISSING',
+                NULL
+            ),
+
+            IFF(
+                GOLDEN_RECORD_COUNT > 1,
+                'MULTIPLE_DONOR_GOLDEN_RECORDS',
+                NULL
+            ),
+
+            IFF(IS_SUPPRESSED = 1, 'GDPR_SUPPRESSED', NULL),
+
+            IFF(
+                GOLDEN_RECORD_COUNT = 1
+                AND COALESCE(CONTACT_COUNT, 0) = 0
+                AND COALESCE(ACCOUNT_COUNT, 0) = 0,
+                'D365_DONOR_ID_MISSING',
+                NULL
+            ),
+
+            IFF(
+                GOLDEN_RECORD_COUNT = 1
+                AND COALESCE(CONTACT_COUNT, 0)
+                    + COALESCE(ACCOUNT_COUNT, 0) > 1,
+                'MULTIPLE_D365_DONOR_IDS',
+                NULL
+            ),
+
+            IFF(
+                GOLDEN_RECORD_COUNT = 1
+                AND IS_SUPPRESSED = 0
+                AND COALESCE(CONTACT_COUNT, 0)
+                    + COALESCE(ACCOUNT_COUNT, 0) = 1
+                AND DONOR_TYPE IS NULL,
+                'INVALID_D365_DONOR_ID',
+                NULL
+            ),
+
+            IFF(
+                GATE_CODES IS NOT NULL,
+                'GATE:' || GATE_CODES,
+                NULL
+            )
+        ),
+        ','
+    ) AS HOLD_REASON,
+
+    -- Dispatchable payload intentionally remains empty.
+    NULL::VARIANT AS PAYLOAD,
+
+    IFF(
+        GOLDEN_RECORD_COUNT = 1 AND IS_SUPPRESSED = 0,
+        GOLDEN_RECORD_ID,
+        NULL
+    ) AS DONOR_GOLDEN_RECORD_ID,
+
+    DONOR_TYPE,
+
+    CASE DONOR_TYPE
+        WHEN 'contact' THEN CONTACT_ID
+        WHEN 'account' THEN ACCOUNT_ID
+    END AS DONOR_D365_ID,
+
+    SPLIT_COUNT,
+    SPLIT_AMOUNT_TOTAL,
+    SPLITS_WITHOUT_AMOUNT,
+    CAMPAIGN_COUNT,
+    APPEAL_COUNT,
+    PACKAGE_COUNT,
+
+    POSSIBLE_MATCHES_BY_GIFT_ID,
+    POSSIBLE_MATCHES_BY_IMPORT_ID,
+
+    -- Preview only. Null values are omitted; inspect HOLD_REASON.
+    OBJECT_CONSTRUCT(
+        'mha_sourceid', TO_VARCHAR(RE_GIFT_ID),
+        'msnfp_amount', RE_AMOUNT,
+        'msnfp_bookdate', TO_CHAR(BOOK_DATE, 'YYYY-MM-DD'),
+        'msnfp_depositdate', TO_CHAR(DEPOSIT_DATE, 'YYYY-MM-DD'),
+        'msnfp_posteddate', TO_CHAR(POSTED_DATE, 'YYYY-MM-DD'),
+        'msnfp_CustomerId_contact@odata.bind',
+            IFF(DONOR_TYPE = 'contact', '/contacts(' || CONTACT_ID || ')', NULL),
+        'msnfp_CustomerId_account@odata.bind',
+            IFF(DONOR_TYPE = 'account', '/accounts(' || ACCOUNT_ID || ')', NULL)
+    ) AS DRAFT_PAYLOAD
+
+FROM RESOLVED;

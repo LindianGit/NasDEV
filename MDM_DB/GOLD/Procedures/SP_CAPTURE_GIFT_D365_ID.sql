@@ -1,0 +1,127 @@
+-- Only call after a successful Dynamics create or a separately verified
+-- reconciliation. All Gift identity writers must use this procedure.
+CREATE OR REPLACE PROCEDURE MDM_DB.GOLD.SP_CAPTURE_GIFT_D365_ID(
+    P_SOURCE_INSTANCE VARCHAR,
+    P_ENTITY_ID VARCHAR,
+    P_SOURCE_RECORD_ID VARCHAR,
+    P_D365_GUID VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS OWNER
+AS
+$$
+DECLARE
+    V_SOURCE_INSTANCE VARCHAR;
+    V_ENTITY_ID VARCHAR;
+    V_SOURCE_RECORD_ID VARCHAR;
+    V_D365_GUID VARCHAR;
+    V_GOLDEN_RECORD_ID VARCHAR;
+    V_XREF_ROWS NUMBER DEFAULT 0;
+    V_MATCHING_XREF_ROWS NUMBER DEFAULT 0;
+    V_OTHER_XREF_ROWS NUMBER DEFAULT 0;
+    V_RESULT VARCHAR;
+    INVALID_INPUT EXCEPTION (-20001, 'Invalid Gift identity capture input.');
+    IDENTITY_CONFLICT EXCEPTION (-20002, 'Gift identity already belongs to a different source or Dynamics ID.');
+    XREF_CONFLICT EXCEPTION (-20003, 'Gift XREF is duplicated or conflicts with the captured ID.');
+BEGIN
+    V_SOURCE_INSTANCE := NULLIF(TRIM(P_SOURCE_INSTANCE), '');
+    V_ENTITY_ID := UPPER(TRIM(P_ENTITY_ID));
+    V_SOURCE_RECORD_ID := NULLIF(TRIM(P_SOURCE_RECORD_ID), '');
+    V_D365_GUID := LOWER(TRIM(P_D365_GUID));
+
+    IF (
+        V_SOURCE_INSTANCE IS NULL
+        OR LENGTH(V_SOURCE_INSTANCE) > 100
+        OR V_ENTITY_ID IS NULL
+        OR V_ENTITY_ID NOT IN ('TRANSACTION', 'DESIGNATEDCREDIT')
+        OR V_SOURCE_RECORD_ID IS NULL
+        OR LENGTH(V_ENTITY_ID) + 1 + LENGTH(V_SOURCE_RECORD_ID) > 100
+        OR V_D365_GUID IS NULL
+        OR NOT REGEXP_LIKE(
+            V_D365_GUID,
+            '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+        )
+    ) THEN
+        RAISE INVALID_INPUT;
+    END IF;
+
+    V_GOLDEN_RECORD_ID := V_ENTITY_ID || ':' || V_SOURCE_RECORD_ID;
+
+    BEGIN TRANSACTION;
+    BEGIN
+        MERGE INTO MDM_DB.GOLD.GIFT_D365_IDENTITY AS T
+        USING (
+            SELECT
+                :V_ENTITY_ID AS ENTITY_ID,
+                :V_SOURCE_RECORD_ID AS SOURCE_RECORD_ID,
+                :V_SOURCE_INSTANCE AS SOURCE_INSTANCE,
+                :V_D365_GUID AS D365_GUID
+        ) AS S
+        ON T.ENTITY_ID = S.ENTITY_ID
+           AND T.SOURCE_RECORD_ID = S.SOURCE_RECORD_ID
+        WHEN NOT MATCHED THEN INSERT (
+            ENTITY_ID, SOURCE_RECORD_ID, SOURCE_INSTANCE, D365_GUID
+        ) VALUES (
+            S.ENTITY_ID, S.SOURCE_RECORD_ID, S.SOURCE_INSTANCE, S.D365_GUID
+        );
+
+        -- The row lock serializes captures for this source key.
+        UPDATE MDM_DB.GOLD.GIFT_D365_IDENTITY
+        SET UPDATED_AT = CURRENT_TIMESTAMP()
+        WHERE ENTITY_ID = :V_ENTITY_ID
+          AND SOURCE_RECORD_ID = :V_SOURCE_RECORD_ID
+          AND SOURCE_INSTANCE = :V_SOURCE_INSTANCE
+          AND D365_GUID = :V_D365_GUID;
+
+        IF (SQLROWCOUNT <> 1) THEN
+            RAISE IDENTITY_CONFLICT;
+        END IF;
+
+        SELECT
+            COUNT(*),
+            COALESCE(COUNT_IF(LOWER(TRIM(SOURCE_RECORD_ID)) = :V_D365_GUID), 0)
+        INTO :V_XREF_ROWS, :V_MATCHING_XREF_ROWS
+        FROM MDM_DB.GOLD.XREF
+        WHERE GOLDEN_RECORD_ID = :V_GOLDEN_RECORD_ID
+          AND SOURCE_SYSTEM = 'DYNAMICS';
+
+        SELECT COUNT(*)
+        INTO :V_OTHER_XREF_ROWS
+        FROM MDM_DB.GOLD.XREF
+        WHERE SOURCE_SYSTEM = 'DYNAMICS'
+          AND LOWER(TRIM(SOURCE_RECORD_ID)) = :V_D365_GUID
+          AND GOLDEN_RECORD_ID LIKE :V_ENTITY_ID || ':%'
+          AND GOLDEN_RECORD_ID <> :V_GOLDEN_RECORD_ID;
+
+        IF (
+            V_XREF_ROWS > 1
+            OR (V_XREF_ROWS = 1 AND V_MATCHING_XREF_ROWS <> 1)
+            OR V_OTHER_XREF_ROWS > 0
+        ) THEN
+            RAISE XREF_CONFLICT;
+        END IF;
+
+        IF (V_XREF_ROWS = 0) THEN
+            INSERT INTO MDM_DB.GOLD.XREF (
+                GOLDEN_RECORD_ID, SOURCE_SYSTEM, SOURCE_RECORD_ID,
+                STANDARDISED_ID, LINKED_AT, LINKED_BY
+            )
+            VALUES (
+                :V_GOLDEN_RECORD_ID, 'DYNAMICS', :V_D365_GUID,
+                NULL, CURRENT_TIMESTAMP(), 'GIFT_WRITEBACK'
+            );
+            V_RESULT := 'CAPTURED';
+        ELSE
+            V_RESULT := 'ALREADY_CAPTURED';
+        END IF;
+
+        COMMIT;
+        RETURN V_RESULT;
+    EXCEPTION
+        WHEN OTHER THEN
+            ROLLBACK;
+            RAISE;
+    END;
+END;
+$$;

@@ -1,0 +1,271 @@
+{
+    "name": "PL_D365_GiftDispatchRequests",
+    "properties": {
+        "description": "Dispatches one Gift's Transaction or Transaction Lines using create-only Dataverse requests. A precondition failure or failed capture stops the pipeline for reconciliation.",
+        "activities": [
+            {
+                "name": "LKP_GiftRequests",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": true,
+                    "secureInput": true
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "SnowflakeV2Source",
+                        "query": {
+                            "value": "SELECT PIPELINE_ID, SOURCE_INSTANCE, ENTITY_ID, SOURCE_RECORD_ID, RE_GIFT_ID, GOLDEN_RECORD_ID, TARGET_GUID, REQUEST_URL, REQUEST_BODY, PAYLOAD_MD5, COUNT(*) OVER () AS REQUEST_COUNT\nFROM INTEGRATION_DB.DYNAMICS.VW_D365_GIFT_REQUESTS\nWHERE PIPELINE_ID = 'D365_GIFT_WRITEBACK'\n  AND SOURCE_INSTANCE = '@{replace(pipeline().parameters.SourceInstance, '''', '''''')}'\n  AND ENTITY_ID = '@{replace(pipeline().parameters.EntityId, '''', '''''')}'\n  AND RE_GIFT_ID = '@{replace(pipeline().parameters.GiftId, '''', '''''')}'\nORDER BY SOURCE_RECORD_ID\nLIMIT 5000",
+                            "type": "Expression"
+                        },
+                        "exportSettings": {
+                            "type": "SnowflakeExportCopyCommand"
+                        },
+                        "treatDecimalAsString": true
+                    },
+                    "dataset": {
+                        "referenceName": "DS_Snowflake_Metadata",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "IF_NoRequests",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "LKP_GiftRequests",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@equals(length(activity('LKP_GiftRequests').output.value), 0)",
+                        "type": "Expression"
+                    },
+                    "ifTrueActivities": [
+                        {
+                            "name": "FAIL_NoRequests",
+                            "type": "Fail",
+                            "typeProperties": {
+                                "message": "No Gift requests are ready; inspect the hold reasons and captured IDs.",
+                                "errorCode": "GIFT_NO_REQUESTS"
+                            }
+                        }
+                    ],
+                    "ifFalseActivities": []
+                }
+            },
+            {
+                "name": "IF_TooManyRequests",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "IF_NoRequests",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@greater(int(first(activity('LKP_GiftRequests').output.value).REQUEST_COUNT), 5000)",
+                        "type": "Expression"
+                    },
+                    "ifTrueActivities": [
+                        {
+                            "name": "FAIL_TooManyRequests",
+                            "type": "Fail",
+                            "typeProperties": {
+                                "message": "The Gift has more requests than a single Lookup can return; no requests were sent.",
+                                "errorCode": "GIFT_REQUEST_LIMIT"
+                            }
+                        }
+                    ],
+                    "ifFalseActivities": []
+                }
+            },
+            {
+                "name": "FE_GiftRequests",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "IF_TooManyRequests",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('LKP_GiftRequests').output.value",
+                        "type": "Expression"
+                    },
+                    "isSequential": true,
+                    "activities": [
+                        {
+                            "name": "WEB_CreateGift",
+                            "type": "WebActivity",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.00:02:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": true,
+                                "secureInput": true
+                            },
+                            "typeProperties": {
+                                "method": "PATCH",
+                                "headers": {
+                                    "Accept": "application/json",
+                                    "Content-Type": "application/json",
+                                    "OData-MaxVersion": "4.0",
+                                    "OData-Version": "4.0",
+                                    "If-None-Match": "*",
+                                    "Prefer": "return=representation"
+                                },
+                                "url": {
+                                    "value": "@concat(item().REQUEST_URL, '?$select=', if(equals(item().ENTITY_ID, 'TRANSACTION'), 'msnfp_transactionid', 'msnfp_designatedcreditid'))",
+                                    "type": "Expression"
+                                },
+                                "body": {
+                                    "value": "@{item().REQUEST_BODY}",
+                                    "type": "Expression"
+                                },
+                                "authentication": {
+                                    "resource": "@{concat(split(item().REQUEST_URL, '/')[0], '//', split(item().REQUEST_URL, '/')[2])}",
+                                    "credential": {
+                                        "referenceName": "cred-mi-prod-df",
+                                        "type": "CredentialReference"
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "IF_VerifyCreatedId",
+                            "type": "IfCondition",
+                            "dependsOn": [
+                                {
+                                    "activity": "WEB_CreateGift",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "typeProperties": {
+                                "expression": {
+                                    "value": "@equals(toLower(string(activity('WEB_CreateGift').output[if(equals(item().ENTITY_ID, 'TRANSACTION'), 'msnfp_transactionid', 'msnfp_designatedcreditid')])), toLower(string(item().TARGET_GUID)))",
+                                    "type": "Expression"
+                                },
+                                "ifTrueActivities": [],
+                                "ifFalseActivities": [
+                                    {
+                                        "name": "FAIL_CreatedIdMismatch",
+                                        "type": "Fail",
+                                        "typeProperties": {
+                                            "message": "Dynamics returned an unexpected Gift ID; reconcile before retrying.",
+                                            "errorCode": "GIFT_ID_MISMATCH"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "name": "SCR_CaptureGift",
+                            "type": "Script",
+                            "dependsOn": [
+                                {
+                                    "activity": "IF_VerifyCreatedId",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": true
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "LS_Snowflake",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "CALL MDM_DB.GOLD.SP_CAPTURE_GIFT_D365_ID('@{replace(string(item().SOURCE_INSTANCE), '''', '''''')}', '@{replace(string(item().ENTITY_ID), '''', '''''')}', '@{replace(string(item().SOURCE_RECORD_ID), '''', '''''')}', '@{replace(string(item().TARGET_GUID), '''', '''''')}');",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "02:00:00"
+                            }
+                        },
+                        {
+                            "name": "SCR_LogGiftSuccess",
+                            "type": "Script",
+                            "dependsOn": [
+                                {
+                                    "activity": "SCR_CaptureGift",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:05:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": true
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "LS_Snowflake",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "CALL AUDIT_DB.MONITORING.SP_D365_LOG_RESPONSE('@{replace(string(item().GOLDEN_RECORD_ID), '''', '''''')}', '@{replace(string(item().ENTITY_ID), '''', '''''')}', '@{replace(string(item().PAYLOAD_MD5), '''', '''''')}', 201, NULL, NULL, '@{pipeline().RunId}');",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "02:00:00"
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "concurrency": 1,
+        "parameters": {
+            "SourceInstance": {
+                "type": "string"
+            },
+            "EntityId": {
+                "type": "string"
+            },
+            "GiftId": {
+                "type": "string"
+            }
+        },
+        "folder": {
+            "name": "Dynamics"
+        },
+        "annotations": []
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}

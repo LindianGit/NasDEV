@@ -1,0 +1,209 @@
+{
+    "name": "PL_D365_GIFT_PILOT_REFRESH_DEV",
+    "properties": {
+        "description": "DEV-only extract of the two Gift pilot attribution records. Writes files for the existing Dynamics Snowflake pipes without changing extraction watermarks.",
+        "activities": [
+            {
+                "name": "CPY_PilotCampaign",
+                "type": "Copy",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.02:00:00",
+                    "retry": 1,
+                    "retryIntervalInSeconds": 60,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "RestSource",
+                        "httpRequestTimeout": "00:05:00",
+                        "requestInterval": "00.00:00:00.200",
+                        "requestMethod": "GET",
+                        "additionalHeaders": {
+                            "OData-MaxVersion": "4.0",
+                            "OData-Version": "4.0",
+                            "Accept": "application/json;odata.metadata=none",
+                            "Prefer": "odata.include-annotations=\"-*\",odata.maxpagesize=5000"
+                        },
+                        "paginationRules": {
+                            "AbsoluteUrl": "$['@odata.nextLink']"
+                        }
+                    },
+                    "sink": {
+                        "type": "JsonSink",
+                        "storeSettings": {
+                            "type": "AzureBlobStorageWriteSettings",
+                            "copyBehavior": "PreserveHierarchy"
+                        },
+                        "formatSettings": {
+                            "type": "JsonWriteSettings"
+                        }
+                    },
+                    "enableStaging": false
+                },
+                "inputs": [
+                    {
+                        "referenceName": "DS_D365_REST",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "relativeUrl": "campaigns?$filter=campaignid eq b34ca41f-d787-4e31-adaf-1fd960180ed5"
+                        }
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "DS_Blob_Staging_JSON",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "FolderPath": {
+                                "value": "@concat('dynamics-api/', formatDateTime(utcNow(), 'yyyyMM'), '/', formatDateTime(utcNow(), 'yyyyMMdd'), '/', formatDateTime(utcNow(), 'HH'))",
+                                "type": "Expression"
+                            },
+                            "FileName": {
+                                "value": "@concat('campaigns_', formatDateTime(utcNow(), 'yyyyMMdd_HHmmss'), '.json.gz')",
+                                "type": "Expression"
+                            }
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "IF_CampaignCount",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "CPY_PilotCampaign",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@equals(activity('CPY_PilotCampaign').output.rowsCopied, 1)",
+                        "type": "Expression"
+                    },
+                    "ifFalseActivities": [
+                        {
+                            "name": "FAIL_CampaignCount",
+                            "type": "Fail",
+                            "typeProperties": {
+                                "message": "Expected exactly one pilot campaign in the extract.",
+                                "errorCode": "PILOT_CAMPAIGN_COUNT"
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "CPY_PilotAppeal",
+                "type": "Copy",
+                "dependsOn": [
+                    {
+                        "activity": "IF_CampaignCount",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.02:00:00",
+                    "retry": 1,
+                    "retryIntervalInSeconds": 60,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "RestSource",
+                        "httpRequestTimeout": "00:05:00",
+                        "requestInterval": "00.00:00:00.200",
+                        "requestMethod": "GET",
+                        "additionalHeaders": {
+                            "OData-MaxVersion": "4.0",
+                            "OData-Version": "4.0",
+                            "Accept": "application/json;odata.metadata=none",
+                            "Prefer": "odata.include-annotations=\"-*\",odata.maxpagesize=5000"
+                        },
+                        "paginationRules": {
+                            "AbsoluteUrl": "$['@odata.nextLink']"
+                        }
+                    },
+                    "sink": {
+                        "type": "JsonSink",
+                        "storeSettings": {
+                            "type": "AzureBlobStorageWriteSettings",
+                            "copyBehavior": "PreserveHierarchy"
+                        },
+                        "formatSettings": {
+                            "type": "JsonWriteSettings"
+                        }
+                    },
+                    "enableStaging": false
+                },
+                "inputs": [
+                    {
+                        "referenceName": "DS_D365_REST",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "relativeUrl": "msnfp_appeals?$filter=msnfp_appealid eq 686fa601-b982-4b5c-85ba-75723f35ad4b"
+                        }
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "DS_Blob_Staging_JSON",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "FolderPath": {
+                                "value": "@concat('dynamics-api/', formatDateTime(utcNow(), 'yyyyMM'), '/', formatDateTime(utcNow(), 'yyyyMMdd'), '/', formatDateTime(utcNow(), 'HH'))",
+                                "type": "Expression"
+                            },
+                            "FileName": {
+                                "value": "@concat('msnfp_appeals_', formatDateTime(utcNow(), 'yyyyMMdd_HHmmss'), '.json.gz')",
+                                "type": "Expression"
+                            }
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "IF_AppealCount",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "CPY_PilotAppeal",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@equals(activity('CPY_PilotAppeal').output.rowsCopied, 1)",
+                        "type": "Expression"
+                    },
+                    "ifFalseActivities": [
+                        {
+                            "name": "FAIL_AppealCount",
+                            "type": "Fail",
+                            "typeProperties": {
+                                "message": "Expected exactly one pilot appeal in the extract.",
+                                "errorCode": "PILOT_APPEAL_COUNT"
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "concurrency": 1,
+        "folder": {
+            "name": "Dynamics"
+        },
+        "annotations": []
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}
