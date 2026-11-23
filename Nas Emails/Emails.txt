@@ -1,0 +1,34 @@
+Hi Christine,
+
+ 
+
+The Membership Sub Category migration is complete: all six populated RE values are present in Dynamics.
+
+ 
+
+The workbook lists the field as mhnas_subcategory, but the values appear under mhnas_newcolumn in NASDataMig. Could you confirm the correct field and update the workbook if needed?
+
+ 
+Thanks,
+
+Lindian
+
+-------------------------------------20/11/2026
+
+Hi Lindian
+
+ 
+
+Thanks for the below.  On your first paragraph, we had seven membership subcategories in RE, but I could see one had never been used and never will be so I deleted it.  There is one subcategory which I’ll be getting rid of as it’s not needed and is only on one record (but I just need to tweak that record first) – shall I let you know once it’s gone (and which it is) or does it not really matter for the purposes of your first test migration?
+
+ 
+
+On your second paragraph, I discussed with my manager Mark H (cc’d) and he thinks you might be best reaching out to mHance re this but Alex should be able to confirm.
+
+ 
+
+Thanks
+
+ 
+
+Christine

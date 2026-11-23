@@ -1,11 +1,11 @@
-{
+ {
     "name": "PL_D365_DispatchRequests",
     "properties": {
-        "description": "Child pipeline called once per entity. Reads pending requests from VW_D365_REQUESTS and dispatches each to the Dataverse Web API using the factory managed identity. A successful POST's GUID is captured before success is logged: Gift pilot records use SP_CAPTURE_GIFT_D365_ID and other records use SP_XREF_CAPTURE_D365_ID. A POST whose capture fails is logged as XREF_CAPTURE_FAILED. Outcomes are logged via SP_D365_LOG_RESPONSE.",
+        "description": "Child pipeline called by PL_D365_Writeback once per entity. Reads pending requests from VW_D365_REQUESTS and dispatches each to the Dataverse Web API. Authenticates via the factory managed identity (Application User in D365) -- no OAuth token is required or passed in. A successful POST's GUID is captured into XREF via SP_XREF_CAPTURE_D365_ID before being logged as a success; a POST that succeeds but whose XREF capture fails is logged as XREF_CAPTURE_FAILED, never a plain success. Every outcome is logged via SP_D365_LOG_RESPONSE, including a best-effort parse of the real HTTP status out of a failed WebActivity error message.",
         "activities": [
             {
                 "name": "LKP_GetRequests",
-                "description": "Fetches requests from the isolated DEV Gift pilot view for D365_GIFT_PILOT, or from VW_D365_REQUESTS for all other pipelines.",
+                "description": "Fetches all pending API writeback requests for this entity from VW_D365_REQUESTS. Each row is one POST or PATCH call, already capped at 2000 rows per entity by the view itself. Plain English: this is the inbox for the sender. If a row is not in VW_D365_REQUESTS, it will not be sent.",
                 "type": "Lookup",
                 "dependsOn": [],
                 "policy": {
@@ -20,7 +20,7 @@
                     "source": {
                         "type": "SnowflakeV2Source",
                         "query": {
-                            "value": "SELECT\n    pipeline_id,\n    source_instance,\n    entity_id,\n    golden_record_id,\n    target_guid,\n    http_method,\n    request_url,\n    request_body,\n    payload_md5\nFROM @{if(equals(pipeline().parameters.PipelineId, 'D365_GIFT_PILOT'), 'INTEGRATION_DB.DYNAMICS.VW_D365_GIFT_PILOT_REQUESTS_DEV', 'INTEGRATION_DB.DYNAMICS.VW_D365_REQUESTS')}\nWHERE pipeline_id = '@{pipeline().parameters.PipelineId}'\n    AND source_instance = '@{pipeline().parameters.SourceInstance}'\n    AND entity_id = '@{pipeline().parameters.EntityId}'@{if(greater(pipeline().parameters.TestRowsPerCombo, 0), concat('\nQUALIFY ROW_NUMBER() OVER (PARTITION BY HTTP_METHOD ORDER BY GOLDEN_RECORD_ID) <= ', string(pipeline().parameters.TestRowsPerCombo)), '')}",
+                            "value": "SELECT\n    pipeline_id,\n    source_instance,\n    entity_id,\n    golden_record_id,\n    target_guid,\n    http_method,\n    request_url,\n    request_body,\n    payload_md5\nFROM @{if(equals(pipeline().parameters.PipelineId, 'D365_EVENTTYPE_PILOT'), 'INTEGRATION_DB.DYNAMICS.VW_D365_EVENTTYPE_PILOT_REQUESTS_DEV', 'INTEGRATION_DB.DYNAMICS.VW_D365_REQUESTS')}\nWHERE pipeline_id = '@{pipeline().parameters.PipelineId}'\n    AND source_instance = '@{pipeline().parameters.SourceInstance}'\n    AND entity_id = '@{pipeline().parameters.EntityId}'@{if(greater(pipeline().parameters.TestRowsPerCombo, 0), concat('\nQUALIFY ROW_NUMBER() OVER (PARTITION BY HTTP_METHOD ORDER BY GOLDEN_RECORD_ID) <= ', string(pipeline().parameters.TestRowsPerCombo)), '')}",
                             "type": "Expression"
                         },
                         "exportSettings": {
@@ -230,7 +230,7 @@
                                                 "Prefer": "return=representation"
                                             },
                                             "url": {
-                                                "value": "@{concat(item().REQUEST_URL, '?$select=', if(and(equals(item().PIPELINE_ID, 'D365_GIFT_PILOT'), equals(item().ENTITY_ID, 'TRANSACTION')), 'msnfp_transactionid', if(and(equals(item().PIPELINE_ID, 'D365_GIFT_PILOT'), equals(item().ENTITY_ID, 'DESIGNATEDCREDIT')), 'msnfp_designatedcreditid', if(equals(item().ENTITY_ID, 'CONTACT'), 'contactid', if(equals(item().ENTITY_ID, 'ACCOUNT'), 'accountid', if(equals(item().ENTITY_ID, 'CONNECTION'), 'connectionid', if(equals(item().ENTITY_ID, 'CAMPAIGN'), 'campaignid', if(equals(item().ENTITY_ID, 'DESIGNATION'), 'msnfp_designationid', if(equals(item().ENTITY_ID, 'MEMBERSHIP'), 'msnfp_membershipid', if(equals(item().ENTITY_ID, 'APPEAL'), 'msnfp_appealid', 'accountid'))))))))))}",
+                                                "value": "@{concat(item().REQUEST_URL, '?$select=', if(and(equals(item().PIPELINE_ID, 'D365_EVENTTYPE_PILOT'), equals(item().ENTITY_ID, 'EVENTTYPE')), 'mha_eventtypeid', if(equals(item().ENTITY_ID, 'CONTACT'), 'contactid', if(equals(item().ENTITY_ID, 'ACCOUNT'), 'accountid', if(equals(item().ENTITY_ID, 'CONNECTION'), 'connectionid', 'accountid')))))}",
                                                 "type": "Expression"
                                             },
                                             "body": {
@@ -248,7 +248,7 @@
                                     },
                                     {
                                         "name": "SCR_CAPTURE_XREF",
-                                        "description": "Captures the new Dataverse GUID using the Gift-specific procedure for Transaction and Designated Credit; other entities retain the existing capture procedure.",
+                                        "description": "Writes the new Dataverse GUID into Snowflake tracking so future runs know this row has already been created. Plain English: this prevents creating duplicates on the next run.",
                                         "type": "Script",
                                         "dependsOn": [
                                             {
@@ -275,7 +275,7 @@
                                                 {
                                                     "type": "NonQuery",
                                                     "text": {
-                                                        "value": "@if(and(equals(item().PIPELINE_ID, 'D365_GIFT_PILOT'), or(equals(item().ENTITY_ID, 'TRANSACTION'), equals(item().ENTITY_ID, 'DESIGNATEDCREDIT'))), concat('CALL MDM_DB.GOLD.SP_CAPTURE_GIFT_D365_ID(''', replace(string(item().SOURCE_INSTANCE), '''', ''''''), ''', ''', item().ENTITY_ID, ''', ''', last(split(item().GOLDEN_RECORD_ID, ':')), ''', ''', string(activity('WEB_Post').output[if(equals(item().ENTITY_ID, 'TRANSACTION'), 'msnfp_transactionid', 'msnfp_designatedcreditid')]), ''');'), concat('CALL MDM_DB.GOLD.SP_XREF_CAPTURE_D365_ID(''', item().GOLDEN_RECORD_ID, ''', ''', string(activity('WEB_Post').output[if(equals(item().ENTITY_ID, 'CONTACT'), 'contactid', if(equals(item().ENTITY_ID, 'ACCOUNT'), 'accountid', if(equals(item().ENTITY_ID, 'CONNECTION'), 'connectionid', if(equals(item().ENTITY_ID, 'CAMPAIGN'), 'campaignid', if(equals(item().ENTITY_ID, 'DESIGNATION'), 'msnfp_designationid', if(equals(item().ENTITY_ID, 'MEMBERSHIP'), 'msnfp_membershipid', if(equals(item().ENTITY_ID, 'APPEAL'), 'msnfp_appealid', 'accountid')))))))]), ''', ''', item().ENTITY_ID, ''');'))",
+                                                        "value": "@if(and(equals(item().PIPELINE_ID, 'D365_EVENTTYPE_PILOT'), equals(item().ENTITY_ID, 'EVENTTYPE')), concat('CALL MDM_DB.GOLD.SP_CAPTURE_EVENTTYPE_D365_ID_DEV(''External Training'', ''', replace(string(activity('WEB_Post').output['mha_eventtypeid']), '''', ''''''), ''');'), concat('CALL MDM_DB.GOLD.SP_XREF_CAPTURE_D365_ID(''', item().GOLDEN_RECORD_ID, ''', ''', string(activity('WEB_Post').output[if(equals(item().ENTITY_ID, 'CONTACT'), 'contactid', if(equals(item().ENTITY_ID, 'ACCOUNT'), 'accountid', if(equals(item().ENTITY_ID, 'CONNECTION'), 'connectionid', 'accountid')))]), ''', ''', item().ENTITY_ID, ''');'))",
                                                         "type": "Expression"
                                                     }
                                                 }
@@ -438,9 +438,6 @@
                     }
                 ],
                 "policy": {
-                    "timeout": "0.00:05:00",
-                    "retry": 0,
-                    "retryIntervalInSeconds": 30,
                     "secureOutput": false,
                     "secureInput": false
                 },
@@ -490,4 +487,4 @@
         "lastPublishTime": "2026-10-27T09:59:09Z"
     },
     "type": "Microsoft.DataFactory/factories/pipelines"
-} 
+}
