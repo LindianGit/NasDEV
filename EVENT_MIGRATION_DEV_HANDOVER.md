@@ -142,3 +142,41 @@ These queries prove the example, not the contents of every captured Event.
   later Dynamics changes or deletion.
 - Before any deployment outside DEV, replace the hard-coded DEV Category IDs,
   remove the DEV gate override and review the Event Type identity fallback.
+
+## Event Sub Category DEV pilot
+
+See the [detailed DEV handover and business questions](EVENT_SUBCATEGORY_DEV_HANDOVER.txt).
+
+The RE Event attribute `Event Type Subcategory` is a candidate source, not a
+confirmed business mapping. In the source preview, Walk and Cycle had exact
+active Dynamics matches; 11 other names had no exact match. Three Events
+(1293, 1428 and 1433) had two distinct values. The user agreed to hold them
+for subcategory mapping pending a business rule; this hold is not yet
+implemented and does not hold or change existing Events.
+
+The user agreed a one-record Marathon pilot, provisionally linked to the DEV
+Sporting event Category. Marathon occurs in RE; the Category choice needs
+business review. Existing Walk, Cycle, Run and Trek/Hike belong to the
+different Dynamics Category Sponsored Activity. No Event Category or Event
+is updated by this pilot, and no wider subcategory load is implemented.
+
+- [Pilot request view](INTEGRATION_DB/DYNAMICS/Views/VW_D365_EVENTSUBCATEGORY_PILOT_REQUESTS_DEV.sql)
+  creates one request only when Marathon is in the source and no matching
+  writeback state or pilot XREF exists.
+- [Pilot capture procedure](MDM_DB/GOLD/Procedures/SP_CAPTURE_EVENTSUBCATEGORY_PILOT_DEV.sql)
+  records the planned ID in XREF and rejects a different returned ID or
+  conflicting XREF.
+- The existing dispatcher includes the `D365_EVENTSUBCATEGORY_PILOT` route.
+  The user validated and debug-ran it in DEV; publication status is unknown.
+- Dynamics readback confirmed Marathon is active, with ID
+  `3cb39ca4-d310-4aa5-9c44-dca36bf9f161` and Category Sporting event
+  (`43ed1d21-70e7-f111-84e9-70a8a575b5fc`). Snowflake XREF returned the
+  same ID for `EVENTSUBCATEGORY:5bb346961a5b7973e114b3a5189f179d`.
+
+Before any pilot run, check live Dynamics for Marathon and the planned ID,
+validate the dispatcher, and run only one writer. The preview does not check
+the live Dynamics name or prevent concurrent creates with different IDs. If
+the POST or capture is uncertain, reconcile in Dynamics before any retry.
+After a successful run, verify the live name, Category and XREF; an empty
+request preview alone is not proof of a successful create. The pilot stores
+its identity in XREF, which does not reflect later Dynamics changes/deletions.

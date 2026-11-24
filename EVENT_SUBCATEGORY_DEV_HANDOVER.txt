@@ -1,0 +1,240 @@
+EVENT SUB CATEGORY - DEV PILOT HANDOVER
+======================================
+
+Status: 24 November 2026
+Environment: DEV only
+
+1. SUMMARY
+----------
+
+One Event Sub Category, Marathon, was created in Dynamics DEV using the
+existing Azure Data Factory (ADF) dispatcher. It was linked provisionally to
+the Event Category Sporting event. Dynamics readback confirmed the name,
+Category, active status and ID; the same ID was captured in Snowflake XREF.
+
+This proves one reference-record pilot, not a full Event Sub Category load.
+It did not add a Sub Category to any Event or change an existing Event.
+The source and Category mapping remain subject to business confirmation.
+
+
+2. DIAGRAM - WHAT WAS DONE
+--------------------------
+
+RAISER'S EDGE DATA IN SNOWFLAKE
+  Event attributes:
+  Category = Event Type Subcategory
+  Value includes Marathon
+                 |
+                 v
+SNOWFLAKE DEV PILOT REQUEST VIEW
+  Checks that Marathon appears in the source.
+  Prepares ONE fixed request:
+    Name     = Marathon
+    Category = Sporting event
+    ID       = 3cb39ca4-d310-4aa5-9c44-dca36bf9f161
+                 |
+                 v
+EXISTING ADF DISPATCHER
+  Reads the pilot request and creates the record.
+                 |
+                 v
+DYNAMICS 365 DEV
+  Event Sub Category: Marathon
+  Category:           Sporting event
+  Status:             Active
+                 |
+                 v
+SNOWFLAKE XREF
+  Captures the returned Dynamics ID against the pilot key.
+
+The pilot request contains fixed values; it is not a general mapping for all
+RE subcategories. The RE data checked is a Snowflake extract, not live RE.
+
+
+3. EVIDENCE
+-----------
+
+Source:
+  RAW.RAISERS_EDGE.VW_ODS_T_EVENTATTRIBUTES
+  CATEGORY = 'Event Type Subcategory'
+  VALUE holds the candidate subcategory name.
+  EVENTID links the attribute to an RE Event.
+
+The source preview showed 203 attribute rows: 200 populated and 3 blank,
+with 13 distinct populated names. These are row counts, not a count of
+distinct Events. Marathon appeared in 44 populated attribute rows.
+
+Before the pilot, an exact-name Dynamics check found active matches for Walk
+and Cycle, and no exact matches for the other 11 names. The user checked
+live Dynamics for Marathon and the planned pilot ID immediately before the
+run; neither was returned.
+
+The user created the pilot Snowflake view and procedure, validated the updated
+existing ADF dispatcher, and ran one DEV debug with:
+
+  PipelineId:       D365_EVENTSUBCATEGORY_PILOT
+  SourceInstance:   SNOWFLAKE_DEV
+  EntityId:         EVENTSUBCATEGORY
+  TestRowsPerCombo: 1
+
+The debug reported success. Independent Dynamics readback showed:
+
+  Name:                 Marathon
+  Status:               Active (statecode 0)
+  Subcategory ID:       3cb39ca4-d310-4aa5-9c44-dca36bf9f161
+  Category:             Sporting event
+  Category ID:          43ed1d21-70e7-f111-84e9-70a8a575b5fc
+
+Snowflake XREF readback showed:
+
+  Golden record ID:     EVENTSUBCATEGORY:5bb346961a5b7973e114b3a5189f179d
+  Dynamics ID:          3cb39ca4-d310-4aa5-9c44-dca36bf9f161
+
+ADF publication status is unknown. ADF success alone is not proof that a
+request was sent; the Dynamics and XREF readbacks are the pilot evidence.
+
+
+4. CODE CREATED OR CHANGED
+--------------------------
+
+Paths below are relative to the repository root.
+
+CREATED:
+  INTEGRATION_DB\DYNAMICS\Views\
+    VW_D365_EVENTSUBCATEGORY_PILOT_REQUESTS_DEV.sql
+
+  Produces the fixed Marathon request only when Marathon is present in the
+  candidate source and no matching writeback state or pilot XREF exists.
+  Uses the DEV Sporting event ID and the confirmed Dynamics navigation
+  property mhnas_Category. It does not check the live Dynamics name.
+
+CREATED:
+  MDM_DB\GOLD\Procedures\
+    SP_CAPTURE_EVENTSUBCATEGORY_PILOT_DEV.sql
+
+  Checks the returned ID against the planned pilot ID and captures it in
+  MDM_DB.GOLD.XREF. Conflicting or duplicate XREFs raise an error.
+  Call only after a successful create or verified reconciliation.
+
+CHANGED:
+  ADF Pipeline\Dynamics\PL_D365_DISPATCHREQUESTS.json
+
+  Three expressions in the existing dispatcher were extended:
+  - LKP_GetRequests selects the pilot request view for this pipeline ID.
+  - WEB_Post requests the Event Sub Category ID in the response.
+  - SCR_CAPTURE_XREF calls the dedicated pilot capture procedure.
+
+  No new ADF pipeline was created. The user validated and debug-ran the
+  modified dispatcher in DEV. Compare the current ADF definition before
+  replacing it: other changes or routes may have been made since this pilot.
+
+DOCUMENTED:
+  EVENT_MIGRATION_DEV_HANDOVER.md
+  EVENT_SUBCATEGORY_DEV_HANDOVER.txt
+
+The pilot view, procedure and dispatcher route are DEV-specific. Before
+go-live, build and test an agreed full-load approach, then retire pilot
+components only when no longer needed for reconciliation or reference.
+Do not delete the XREF evidence without an agreed retention approach.
+
+
+5. DIAGRAM - WHAT REMAINS
+------------------------
+
+RE candidate values
+        |
+        v
+Confirm source, names and Category rules with the business
+        |
+        +--> Walk and Cycle: review reuse of existing Dynamics records
+        |
+        +--> Marathon: pilot already created in DEV
+        |
+        +--> Other 10 names: agree Categories, then prepare a full load
+        |
+        v
+Build and test a repeatable, safe reference-data load
+        |
+        v
+Separately agree and build how Events receive Sub Category links
+        |
+        +--> Hold Events with multiple values for review, as agreed
+             (the hold is not yet implemented)
+
+The ten names without an exact match at the time of the original check,
+excluding the Marathon pilot, are:
+  Abseil, Adventure Trek, Challenge, Half Marathon, Own Place, Skydive,
+  Social, Student Trek, Trek and Virtual.
+
+The source preview showed Social and Virtual under both Other and Sporting
+event. A subcategory record has one Category lookup, so the intended
+handling needs a decision. Walk, Cycle, Run and Trek/Hike already belong to
+Sponsored Activity in Dynamics, not the provisional Sporting event Category.
+It has not been established whether the Dynamics form filters or enforces
+the Category/Sub Category combination.
+
+Three RE Events had two distinct values:
+  1293: Own Place and Marathon
+  1428: Cycle and Virtual
+  1433: Half Marathon and Virtual
+
+The user agreed to hold these for subcategory mapping until a rule is
+decided. No hold has been implemented and existing Events were not changed.
+Other Events may have no subcategory value; the treatment of blank or missing
+values also needs agreement.
+
+
+6. QUESTIONS FOR THE BUSINESS
+-----------------------------
+
+These are advance questions; answers are not required yet.
+
+1. Should the RE values recorded as Event Type Subcategory be used as Event
+   Sub Categories in Dynamics?
+
+2. Should we retain each of the 11 RE names that did not have an exact
+   Dynamics match, or use broader existing names where appropriate, such as
+   Run for Marathon? Marathon has been created provisionally in DEV.
+
+3. Which Dynamics Category should each subcategory belong to? In particular,
+   should Marathon be under Sporting event or Sponsored Activity?
+
+4. Should we reuse existing Walk and Cycle even though they are linked to
+   Sponsored Activity rather than our provisional Sporting event Category?
+
+5. Social and Virtual appear under both Sporting event and Other in RE.
+   Where should each sit in Dynamics?
+
+6. Are Virtual and Own Place subcategories, or do they describe something
+   else about an Event that should be recorded separately?
+
+7. Where an Event has two subcategories, which should be used? Is there
+   another place the second value should be recorded?
+
+8. What should happen where an Event has a blank or missing subcategory?
+
+9. Should subcategories be added to Events already migrated to Dynamics DEV?
+
+10. Should the full migration include all historical Events and values, or
+    only an agreed subset?
+
+11. Are the four provisional Categories Other, Sporting event, Dinner and
+    Class appropriate, or should existing Dynamics Categories be used instead?
+
+
+7. SAFETY AND RESTART
+---------------------
+
+- Do not rerun this pilot as a way to load the remaining names: it is fixed
+  to Marathon, and Marathon already exists.
+- Run no overlapping pilot or other writer for the same record.
+- The view excludes captured pilot IDs and writeback state, but it does not
+  check live Dynamics for a matching name. Those checks do not protect
+  against all duplicates or concurrent writes.
+- If a create or ID capture has an uncertain outcome, check Dynamics and
+  reconcile before retrying. Do not treat an empty preview as proof of
+  successful migration.
+- XREF records a captured ID, not live record status. Later changes or
+  deletion in Dynamics require a current readback or reliable extract.
+- Full-load processing, Event lookup updates, multi-value handling and the
+  business mappings are not yet implemented or tested.

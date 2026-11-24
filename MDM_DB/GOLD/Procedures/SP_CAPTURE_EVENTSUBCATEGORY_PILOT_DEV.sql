@@ -1,0 +1,69 @@
+-- Call only after a successful create or verified reconciliation in DEV.
+CREATE PROCEDURE MDM_DB.GOLD.SP_CAPTURE_EVENTSUBCATEGORY_PILOT_DEV(
+    P_D365_GUID VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS OWNER
+AS
+$$
+DECLARE
+    V_GUID VARCHAR;
+    V_KEY VARCHAR;
+    V_ROWS NUMBER DEFAULT 0;
+    V_MATCHES NUMBER DEFAULT 0;
+    V_OTHER_ROWS NUMBER DEFAULT 0;
+    V_RESULT VARCHAR;
+    INVALID_ID EXCEPTION (-20001, 'Unexpected Event Sub Category pilot ID.');
+    XREF_CONFLICT EXCEPTION (-20002, 'Event Sub Category pilot XREF conflicts or is duplicated.');
+BEGIN
+    V_GUID := LOWER(TRIM(P_D365_GUID));
+    IF (V_GUID IS NULL OR V_GUID <> '3cb39ca4-d310-4aa5-9c44-dca36bf9f161') THEN
+        RAISE INVALID_ID;
+    END IF;
+    V_KEY := 'EVENTSUBCATEGORY:' || MD5('MARATHON');
+
+    BEGIN TRANSACTION;
+    BEGIN
+        SELECT COUNT(*),
+            COALESCE(COUNT_IF(LOWER(TRIM(SOURCE_RECORD_ID)) = :V_GUID), 0)
+        INTO :V_ROWS, :V_MATCHES
+        FROM MDM_DB.GOLD.XREF
+        WHERE SOURCE_SYSTEM = 'DYNAMICS'
+          AND GOLDEN_RECORD_ID = :V_KEY;
+
+        SELECT COUNT(*)
+        INTO :V_OTHER_ROWS
+        FROM MDM_DB.GOLD.XREF
+        WHERE SOURCE_SYSTEM = 'DYNAMICS'
+          AND GOLDEN_RECORD_ID LIKE 'EVENTSUBCATEGORY:%'
+          AND GOLDEN_RECORD_ID <> :V_KEY
+          AND LOWER(TRIM(SOURCE_RECORD_ID)) = :V_GUID;
+
+        IF (V_ROWS > 1 OR (V_ROWS = 1 AND V_MATCHES <> 1) OR V_OTHER_ROWS > 0) THEN
+            RAISE XREF_CONFLICT;
+        END IF;
+
+        IF (V_ROWS = 0) THEN
+            INSERT INTO MDM_DB.GOLD.XREF (
+                GOLDEN_RECORD_ID, SOURCE_SYSTEM, SOURCE_RECORD_ID,
+                STANDARDISED_ID, LINKED_AT, LINKED_BY
+            )
+            VALUES (
+                :V_KEY, 'DYNAMICS', :V_GUID,
+                NULL, CURRENT_TIMESTAMP(), 'EVENTSUBCATEGORY_PILOT_DEV'
+            );
+            V_RESULT := 'CAPTURED';
+        ELSE
+            V_RESULT := 'ALREADY_CAPTURED';
+        END IF;
+
+        COMMIT;
+        RETURN V_RESULT;
+    EXCEPTION
+        WHEN OTHER THEN
+            ROLLBACK;
+            RAISE;
+    END;
+END;
+$$;
