@@ -5,7 +5,7 @@
         "activities": [
             {
                 "name": "LKP_GetRequests",
-                "description": "Fetches all pending API writeback requests for this entity from VW_D365_REQUESTS. Each row is one POST or PATCH call, already capped at 2000 rows per entity by the view itself. Plain English: this is the inbox for the sender. If a row is not in VW_D365_REQUESTS, it will not be sent.",
+                "description": "Fetches pending writeback requests. DEV Event batch defaults to one request unless TestRowsPerCombo specifies a larger limit; the Event Type batch remains capped at one.",
                 "type": "Lookup",
                 "dependsOn": [],
                 "policy": {
@@ -20,7 +20,7 @@
                     "source": {
                         "type": "SnowflakeV2Source",
                         "query": {
-                            "value": "SELECT\n    pipeline_id,\n    source_instance,\n    entity_id,\n    golden_record_id,\n    target_guid,\n    http_method,\n    request_url,\n    request_body,\n    payload_md5\nFROM @{if(equals(pipeline().parameters.PipelineId, 'D365_EVENTTYPE_PILOT'), 'INTEGRATION_DB.DYNAMICS.VW_D365_EVENTTYPE_PILOT_REQUESTS_DEV', 'INTEGRATION_DB.DYNAMICS.VW_D365_REQUESTS')}\nWHERE pipeline_id = '@{pipeline().parameters.PipelineId}'\n    AND source_instance = '@{pipeline().parameters.SourceInstance}'\n    AND entity_id = '@{pipeline().parameters.EntityId}'@{if(greater(pipeline().parameters.TestRowsPerCombo, 0), concat('\nQUALIFY ROW_NUMBER() OVER (PARTITION BY HTTP_METHOD ORDER BY GOLDEN_RECORD_ID) <= ', string(pipeline().parameters.TestRowsPerCombo)), '')}",
+                            "value": "SELECT\n    pipeline_id,\n    source_instance,\n    entity_id,\n    golden_record_id,\n    target_guid,\n    http_method,\n    request_url,\n    request_body,\n    payload_md5@{if(equals(pipeline().parameters.PipelineId, 'D365_EVENT_BATCH'), ', re_event_id, re_event_ref, planned_d365_guid', if(equals(pipeline().parameters.PipelineId, 'D365_EVENTTYPE_BATCH'), ', re_event_type, request_body:\"mha_eventtypeid\"::VARCHAR AS planned_d365_guid', ''))}\nFROM @{if(equals(pipeline().parameters.PipelineId, 'D365_EVENT_BATCH'), 'INTEGRATION_DB.DYNAMICS.VW_D365_EVENT_BATCH_REQUESTS_DEV', if(equals(pipeline().parameters.PipelineId, 'D365_EVENT_PILOT'), 'INTEGRATION_DB.DYNAMICS.VW_D365_EVENT_PILOT_REQUESTS_DEV', if(equals(pipeline().parameters.PipelineId, 'D365_EVENTTYPE_BATCH'), 'INTEGRATION_DB.DYNAMICS.VW_D365_EVENTTYPE_BATCH_REQUESTS_DEV', if(equals(pipeline().parameters.PipelineId, 'D365_EVENTTYPE_PILOT'), 'INTEGRATION_DB.DYNAMICS.VW_D365_EVENTTYPE_PILOT_REQUESTS_DEV', 'INTEGRATION_DB.DYNAMICS.VW_D365_REQUESTS'))))}\nWHERE pipeline_id = '@{pipeline().parameters.PipelineId}'\n    AND source_instance = '@{pipeline().parameters.SourceInstance}'\n    AND entity_id = '@{pipeline().parameters.EntityId}'@{if(equals(pipeline().parameters.PipelineId, 'D365_EVENT_BATCH'), concat('\n    AND http_method = ''POST''\nQUALIFY ROW_NUMBER() OVER (ORDER BY GOLDEN_RECORD_ID) <= LEAST(', if(greater(pipeline().parameters.TestRowsPerCombo, 0), string(pipeline().parameters.TestRowsPerCombo), '1'), ', 2000)'), if(equals(pipeline().parameters.PipelineId, 'D365_EVENTTYPE_BATCH'), '\n    AND http_method = ''POST''\nQUALIFY ROW_NUMBER() OVER (ORDER BY GOLDEN_RECORD_ID) = 1', if(greater(pipeline().parameters.TestRowsPerCombo, 0), concat('\nQUALIFY ROW_NUMBER() OVER (PARTITION BY HTTP_METHOD ORDER BY GOLDEN_RECORD_ID) <= ', string(pipeline().parameters.TestRowsPerCombo)), '')))}",
                             "type": "Expression"
                         },
                         "exportSettings": {
@@ -50,7 +50,7 @@
                 "userProperties": [],
                 "typeProperties": {
                     "items": {
-                        "value": "@activity('LKP_GetRequests').output.value",
+                        "value": "@if(equals(pipeline().parameters.PipelineId, 'D365_EVENT_BATCH'), json('[]'), activity('LKP_GetRequests').output.value)",
                         "type": "Expression"
                     },
                     "isSequential": false,
@@ -230,7 +230,7 @@
                                                 "Prefer": "return=representation"
                                             },
                                             "url": {
-                                                "value": "@{concat(item().REQUEST_URL, '?$select=', if(and(equals(item().PIPELINE_ID, 'D365_EVENTTYPE_PILOT'), equals(item().ENTITY_ID, 'EVENTTYPE')), 'mha_eventtypeid', if(equals(item().ENTITY_ID, 'CONTACT'), 'contactid', if(equals(item().ENTITY_ID, 'ACCOUNT'), 'accountid', if(equals(item().ENTITY_ID, 'CONNECTION'), 'connectionid', 'accountid')))))}",
+                                                "value": "@{concat(item().REQUEST_URL, '?$select=', if(and(equals(item().PIPELINE_ID, 'D365_EVENT_PILOT'), equals(item().ENTITY_ID, 'EVENT')), 'msnfp_eventid', if(and(or(equals(item().PIPELINE_ID, 'D365_EVENTTYPE_PILOT'), equals(item().PIPELINE_ID, 'D365_EVENTTYPE_BATCH')), equals(item().ENTITY_ID, 'EVENTTYPE')), 'mha_eventtypeid', if(equals(item().ENTITY_ID, 'CONTACT'), 'contactid', if(equals(item().ENTITY_ID, 'ACCOUNT'), 'accountid', if(equals(item().ENTITY_ID, 'CONNECTION'), 'connectionid', 'accountid'))))))}",
                                                 "type": "Expression"
                                             },
                                             "body": {
@@ -248,7 +248,7 @@
                                     },
                                     {
                                         "name": "SCR_CAPTURE_XREF",
-                                        "description": "Writes the new Dataverse GUID into Snowflake tracking so future runs know this row has already been created. Plain English: this prevents creating duplicates on the next run.",
+                                        "description": "Captures the new Dataverse GUID. DEV Event and Event Type batch routes require the returned GUID to match the planned ID.",
                                         "type": "Script",
                                         "dependsOn": [
                                             {
@@ -275,7 +275,7 @@
                                                 {
                                                     "type": "NonQuery",
                                                     "text": {
-                                                        "value": "@if(and(equals(item().PIPELINE_ID, 'D365_EVENTTYPE_PILOT'), equals(item().ENTITY_ID, 'EVENTTYPE')), concat('CALL MDM_DB.GOLD.SP_CAPTURE_EVENTTYPE_D365_ID_DEV(''External Training'', ''', replace(string(activity('WEB_Post').output['mha_eventtypeid']), '''', ''''''), ''');'), concat('CALL MDM_DB.GOLD.SP_XREF_CAPTURE_D365_ID(''', item().GOLDEN_RECORD_ID, ''', ''', string(activity('WEB_Post').output[if(equals(item().ENTITY_ID, 'CONTACT'), 'contactid', if(equals(item().ENTITY_ID, 'ACCOUNT'), 'accountid', if(equals(item().ENTITY_ID, 'CONNECTION'), 'connectionid', 'accountid')))]), ''', ''', item().ENTITY_ID, ''');'))",
+                                                        "value": "@if(and(equals(item().PIPELINE_ID, 'D365_EVENT_PILOT'), equals(item().ENTITY_ID, 'EVENT')), concat('CALL MDM_DB.GOLD.SP_CAPTURE_EVENT_D365_ID_DEV(''14'', IFF(LOWER(''', replace(string(activity('WEB_Post').output['msnfp_eventid']), '''', ''''''), ''') = ''609825fb-8311-46a9-85c8-b372cbba3ae0'', ''', replace(string(activity('WEB_Post').output['msnfp_eventid']), '''', ''''''), ''', NULL));'), if(and(equals(item().PIPELINE_ID, 'D365_EVENTTYPE_BATCH'), equals(item().ENTITY_ID, 'EVENTTYPE')), concat('CALL MDM_DB.GOLD.SP_CAPTURE_EVENTTYPE_D365_ID_DEV(''', replace(string(item().RE_EVENT_TYPE), '''', ''''''), ''', IFF(LOWER(''', replace(string(activity('WEB_Post').output['mha_eventtypeid']), '''', ''''''), ''') = LOWER(''', replace(string(item().PLANNED_D365_GUID), '''', ''''''), '''), ''', replace(string(activity('WEB_Post').output['mha_eventtypeid']), '''', ''''''), ''', NULL));'), if(and(equals(item().PIPELINE_ID, 'D365_EVENTTYPE_PILOT'), equals(item().ENTITY_ID, 'EVENTTYPE')), concat('CALL MDM_DB.GOLD.SP_CAPTURE_EVENTTYPE_D365_ID_DEV(''External Training'', ''', replace(string(activity('WEB_Post').output['mha_eventtypeid']), '''', ''''''), ''');'), concat('CALL MDM_DB.GOLD.SP_XREF_CAPTURE_D365_ID(''', item().GOLDEN_RECORD_ID, ''', ''', string(activity('WEB_Post').output[if(equals(item().ENTITY_ID, 'CONTACT'), 'contactid', if(equals(item().ENTITY_ID, 'ACCOUNT'), 'accountid', if(equals(item().ENTITY_ID, 'CONNECTION'), 'connectionid', 'accountid')))]), ''', ''', item().ENTITY_ID, ''');'))))",
                                                         "type": "Expression"
                                                     }
                                                 }
@@ -426,12 +426,222 @@
                 }
             },
             {
+                "name": "FE_EventBatch",
+                "description": "Processes DEV Event requests sequentially. A live Event code check precedes each create; failures require reconciliation before another run.",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "LKP_GetRequests",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@if(equals(pipeline().parameters.PipelineId, 'D365_EVENT_BATCH'), activity('LKP_GetRequests').output.value, json('[]'))",
+                        "type": "Expression"
+                    },
+                    "isSequential": true,
+                    "activities": [
+                        {
+                            "name": "WEB_EventPreflight",
+                            "description": "Checks the live DEV Event code before POST; an existing match is not created again.",
+                            "type": "WebActivity",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.00:02:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": true,
+                                "secureInput": true
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "method": "GET",
+                                "headers": {
+                                    "Accept": "application/json",
+                                    "OData-MaxVersion": "4.0",
+                                    "OData-Version": "4.0"
+                                },
+                                "url": {
+                                    "value": "@concat(item().REQUEST_URL, '?$select=msnfp_eventid&$top=1&$filter=mha_eventcode%20eq%20%27', uriComponent(replace(string(item().RE_EVENT_REF), '''', '''''')), '%27')",
+                                    "type": "Expression"
+                                },
+                                "authentication": {
+                                    "resource": "https://nasdatamig.crm11.dynamics.com",
+                                    "credential": {
+                                        "referenceName": "cred-mi-prod-df",
+                                        "type": "CredentialReference"
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "IF_EventNotFound",
+                            "description": "Creates only when the live preflight found no Event with this code.",
+                            "type": "IfCondition",
+                            "dependsOn": [
+                                {
+                                    "activity": "WEB_EventPreflight",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "userProperties": [],
+                            "typeProperties": {
+                                "expression": {
+                                    "value": "@equals(length(activity('WEB_EventPreflight').output.value), 0)",
+                                    "type": "Expression"
+                                },
+                                "ifTrueActivities": [
+                                    {
+                                        "name": "WEB_EventPost",
+                                        "type": "WebActivity",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "timeout": "0.00:02:00",
+                                            "retry": 0,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": true,
+                                            "secureInput": true
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "method": "POST",
+                                            "headers": {
+                                                "Accept": "application/json",
+                                                "Content-Type": "application/json",
+                                                "OData-MaxVersion": "4.0",
+                                                "OData-Version": "4.0",
+                                                "Prefer": "return=representation"
+                                            },
+                                            "url": {
+                                                "value": "@concat(item().REQUEST_URL, '?$select=msnfp_eventid')",
+                                                "type": "Expression"
+                                            },
+                                            "body": {
+                                                "value": "@{item().REQUEST_BODY}",
+                                                "type": "Expression"
+                                            },
+                                            "authentication": {
+                                                "resource": "https://nasdatamig.crm11.dynamics.com",
+                                                "credential": {
+                                                    "referenceName": "cred-mi-prod-df",
+                                                    "type": "CredentialReference"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "name": "SCR_CaptureEvent",
+                                        "description": "Captures only when the returned ID matches this request's planned ID.",
+                                        "type": "Script",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "WEB_EventPost",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "LS_Snowflake",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "NonQuery",
+                                                    "text": {
+                                                        "value": "@concat('CALL MDM_DB.GOLD.SP_CAPTURE_EVENT_D365_ID_DEV(''', replace(string(item().RE_EVENT_ID), '''', ''''''), ''', IFF(LOWER(''', replace(string(activity('WEB_EventPost').output['msnfp_eventid']), '''', ''''''), ''') = LOWER(''', replace(string(item().PLANNED_D365_GUID), '''', ''''''), '''), ''', replace(string(activity('WEB_EventPost').output['msnfp_eventid']), '''', ''''''), ''', NULL));')",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    },
+                                    {
+                                        "name": "SCR_LogEventSuccess",
+                                        "type": "Script",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "SCR_CaptureEvent",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.00:05:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "LS_Snowflake",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "NonQuery",
+                                                    "text": {
+                                                        "value": "CALL AUDIT_DB.MONITORING.SP_D365_LOG_RESPONSE('@{item().GOLDEN_RECORD_ID}', '@{item().ENTITY_ID}', '@{item().PAYLOAD_MD5}', 201, NULL, NULL, '@{pipeline().RunId}');",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    }
+                                ],
+                                "ifFalseActivities": [
+                                    {
+                                        "name": "FAIL_EventExists",
+                                        "type": "Fail",
+                                        "dependsOn": [],
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "message": {
+                                                "value": "@concat('Dynamics already contains Event code: ', string(item().RE_EVENT_REF))",
+                                                "type": "Expression"
+                                            },
+                                            "errorCode": "EVENT_ALREADY_EXISTS"
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            {
                 "name": "SET_ReturnVars",
                 "description": "Returns the row count this run attempted, so the caller's watermark reflects real activity, not a backlog re-query.",
                 "type": "SetVariable",
                 "dependsOn": [
                     {
                         "activity": "FE_ApiRequests",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    },
+                    {
+                        "activity": "FE_EventBatch",
                         "dependencyConditions": [
                             "Succeeded"
                         ]

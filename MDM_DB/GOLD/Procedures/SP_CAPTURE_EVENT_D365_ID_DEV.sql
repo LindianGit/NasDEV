@@ -1,0 +1,106 @@
+-- Call only after a successful Dynamics create or verified reconciliation.
+CREATE PROCEDURE MDM_DB.GOLD.SP_CAPTURE_EVENT_D365_ID_DEV(
+    P_RE_EVENT_ID VARCHAR,
+    P_D365_GUID VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS OWNER
+AS
+$$
+DECLARE
+    V_EVENT_ID VARCHAR;
+    V_D365_GUID VARCHAR;
+    V_GOLDEN_RECORD_ID VARCHAR;
+    V_XREF_ROWS NUMBER DEFAULT 0;
+    V_MATCHING_XREF_ROWS NUMBER DEFAULT 0;
+    V_OTHER_XREF_ROWS NUMBER DEFAULT 0;
+    V_RESULT VARCHAR;
+    INVALID_INPUT EXCEPTION (-20001, 'Invalid Event identity capture input.');
+    IDENTITY_CONFLICT EXCEPTION (-20002, 'Event identity conflicts with an existing ID.');
+    XREF_CONFLICT EXCEPTION (-20003, 'Event XREF is duplicated or conflicts with the captured ID.');
+BEGIN
+    V_EVENT_ID := NULLIF(TRIM(P_RE_EVENT_ID), '');
+    V_D365_GUID := LOWER(TRIM(P_D365_GUID));
+
+    IF (
+        V_EVENT_ID IS NULL
+        OR LENGTH(V_EVENT_ID) > 100
+        OR NOT REGEXP_LIKE(V_EVENT_ID, '[0-9]+')
+        OR V_D365_GUID IS NULL
+        OR NOT REGEXP_LIKE(
+            V_D365_GUID,
+            '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+        )
+    ) THEN
+        RAISE INVALID_INPUT;
+    END IF;
+
+    V_GOLDEN_RECORD_ID := 'EVENT:' || V_EVENT_ID;
+
+    BEGIN TRANSACTION;
+    BEGIN
+        MERGE INTO MDM_DB.GOLD.EVENT_D365_IDENTITY_DEV AS T
+        USING (
+            SELECT :V_EVENT_ID AS RE_EVENT_ID, :V_D365_GUID AS D365_GUID
+        ) AS S
+        ON T.RE_EVENT_ID = S.RE_EVENT_ID
+        WHEN NOT MATCHED THEN INSERT (RE_EVENT_ID, D365_GUID)
+        VALUES (S.RE_EVENT_ID, S.D365_GUID);
+
+        UPDATE MDM_DB.GOLD.EVENT_D365_IDENTITY_DEV
+        SET UPDATED_AT = CURRENT_TIMESTAMP()
+        WHERE RE_EVENT_ID = :V_EVENT_ID
+          AND D365_GUID = :V_D365_GUID;
+
+        IF (SQLROWCOUNT <> 1) THEN
+            RAISE IDENTITY_CONFLICT;
+        END IF;
+
+        SELECT
+            COUNT(*),
+            COALESCE(COUNT_IF(LOWER(TRIM(SOURCE_RECORD_ID)) = :V_D365_GUID), 0)
+        INTO :V_XREF_ROWS, :V_MATCHING_XREF_ROWS
+        FROM MDM_DB.GOLD.XREF
+        WHERE GOLDEN_RECORD_ID = :V_GOLDEN_RECORD_ID
+          AND SOURCE_SYSTEM = 'DYNAMICS';
+
+        SELECT COUNT(*)
+        INTO :V_OTHER_XREF_ROWS
+        FROM MDM_DB.GOLD.XREF
+        WHERE SOURCE_SYSTEM = 'DYNAMICS'
+          AND LOWER(TRIM(SOURCE_RECORD_ID)) = :V_D365_GUID
+          AND GOLDEN_RECORD_ID LIKE 'EVENT:%'
+          AND GOLDEN_RECORD_ID <> :V_GOLDEN_RECORD_ID;
+
+        IF (
+            V_XREF_ROWS > 1
+            OR (V_XREF_ROWS = 1 AND V_MATCHING_XREF_ROWS <> 1)
+            OR V_OTHER_XREF_ROWS > 0
+        ) THEN
+            RAISE XREF_CONFLICT;
+        END IF;
+
+        IF (V_XREF_ROWS = 0) THEN
+            INSERT INTO MDM_DB.GOLD.XREF (
+                GOLDEN_RECORD_ID, SOURCE_SYSTEM, SOURCE_RECORD_ID,
+                STANDARDISED_ID, LINKED_AT, LINKED_BY
+            )
+            VALUES (
+                :V_GOLDEN_RECORD_ID, 'DYNAMICS', :V_D365_GUID,
+                NULL, CURRENT_TIMESTAMP(), 'EVENT_WRITEBACK_DEV'
+            );
+            V_RESULT := 'CAPTURED';
+        ELSE
+            V_RESULT := 'ALREADY_CAPTURED';
+        END IF;
+
+        COMMIT;
+        RETURN V_RESULT;
+    EXCEPTION
+        WHEN OTHER THEN
+            ROLLBACK;
+            RAISE;
+    END;
+END;
+$$;

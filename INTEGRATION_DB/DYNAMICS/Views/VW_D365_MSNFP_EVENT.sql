@@ -22,7 +22,9 @@ create or replace view INTEGRATION_DB.DYNAMICS.VW_D365_MSNFP_EVENT(
 	MSNFP_PROPOSEDEND,
 	MSNFP_PROPOSEDSTART,
 	OVERRIDDENCREATEDON,
-	OWNINGTEAM
+	OWNINGTEAM,
+	RE_EVENT_CATEGORY,
+	MHNAS_EVENTCATEGORY_D365_ID
 ) as
 -- One D365 event per RE event. The key is the RE event reference, which D365
 -- holds in mha_eventcode (matched ignoring case and padding). The reference is
@@ -33,13 +35,21 @@ create or replace view INTEGRATION_DB.DYNAMICS.VW_D365_MSNFP_EVENT(
 -- D365 already held binds the same way as a new one.
 -- Event type: the client owns the event type list, so the RE type description
 -- is matched by name to the D365 event types, ignoring case and padding.
+-- In DEV, captured IDs fill gaps in the extract; conflicting IDs are held.
+-- Captured IDs do not reflect later Dynamics changes without an extract.
+-- Event category: the four RE categories are provisionally matched to the
+-- manually created D365 DEV records. Confirm the mapping with the business.
+-- The IDs below are DEV-only; replace them with a D365 extract before any
+-- deployment to another environment.
 -- An event whose campaign or type has no D365 id yet is held with
--- PARENT_MISSING and the missing parents. An event with neither loads without
--- them.
+-- PARENT_MISSING and the missing parents. An unmapped nonblank category is
+-- held too. An event without these source values loads without them.
 -- Location: an RE location that says virtual or online is Virtual. Any other
 -- location is In-person / Hybrid. No location sends nothing.
 -- Dates: the D365 start and end are date only, so the RE start and end times
 -- are not sent. The RE date added is the created date, sent as a date.
+-- DEV acceptance: these field rules, the RE reference as unique ID, and no
+-- explicit owning team were agreed on 2026-11-23, subject to acceptance review.
 WITH D365_EVENTS AS (
     SELECT
         UPPER(TRIM(MHA_EVENTCODE)) AS CODE_KEY,
@@ -53,7 +63,7 @@ WITH D365_EVENTS AS (
         ) = 1
 ),
 
-D365_EVENT_TYPES AS (
+D365_EVENT_TYPES_EXTRACT AS (
     SELECT
         UPPER(TRIM(MHA_NAME)) AS NAME_KEY,
         MHA_EVENTTYPEID
@@ -64,6 +74,37 @@ D365_EVENT_TYPES AS (
             PARTITION BY UPPER(TRIM(MHA_NAME))
             ORDER BY CREATEDON, MHA_EVENTTYPEID
         ) = 1
+),
+
+D365_EVENT_TYPES AS (
+    SELECT
+        COALESCE(D.NAME_KEY, I.RE_EVENT_TYPE_KEY) AS NAME_KEY,
+        IFF(
+            D.MHA_EVENTTYPEID IS NOT NULL
+            AND I.D365_GUID IS NOT NULL
+            AND LOWER(TRIM(D.MHA_EVENTTYPEID)) <> LOWER(TRIM(I.D365_GUID)),
+            TRUE,
+            FALSE
+        ) AS ID_CONFLICT,
+        IFF(
+            D.MHA_EVENTTYPEID IS NOT NULL
+            AND I.D365_GUID IS NOT NULL
+            AND LOWER(TRIM(D.MHA_EVENTTYPEID)) <> LOWER(TRIM(I.D365_GUID)),
+            NULL,
+            COALESCE(D.MHA_EVENTTYPEID, I.D365_GUID)
+        ) AS MHA_EVENTTYPEID
+    FROM D365_EVENT_TYPES_EXTRACT AS D
+    FULL OUTER JOIN MDM_DB.GOLD.EVENTTYPE_D365_IDENTITY_DEV AS I
+        ON D.NAME_KEY = I.RE_EVENT_TYPE_KEY
+),
+
+DEV_EVENT_CATEGORIES AS (
+    SELECT COLUMN1 AS NAME_KEY, COLUMN2 AS MHNAS_EVENTCATEGORYID
+    FROM VALUES
+        ('OTHER', '1e819518-70e7-f111-84e9-70a8a575b5fc'),
+        ('SPORTING EVENT', '43ed1d21-70e7-f111-84e9-70a8a575b5fc'),
+        ('DINNER', '44ed1d21-70e7-f111-84e9-70a8a575b5fc'),
+        ('CLASS', '34ea7f2c-70e7-f111-84e9-70a8a575b5fc')
 ),
 
 -- Open gates that cover the whole table
@@ -78,6 +119,8 @@ GATES AS (
         D365_TABLE = 'msnfp_event'
         AND IS_OPEN
         AND ROW_CONDITION_KEY IS NULL
+        -- DEV-only override; do not deploy this view unchanged elsewhere.
+        AND GATE_CODE <> 'EVENT_FIELD_RULES'
 ),
 
 MAPPED AS (
@@ -89,6 +132,8 @@ MAPPED AS (
         D.MSNFP_EVENTID AS D365_ID,
         C.D365_ID AS CAMPAIGN_D365_ID,
         T.MHA_EVENTTYPEID AS MHA_EVENTTYPE_D365_ID,
+        NULLIF(TRIM(E.CATEGORY), '') AS RE_EVENT_CATEGORY,
+        EC.MHNAS_EVENTCATEGORYID AS MHNAS_EVENTCATEGORY_D365_ID,
         G.GATE_CODES,
         -- Parents with an RE value but no D365 id, in a fixed order
         NULLIF(
@@ -102,7 +147,13 @@ MAPPED AS (
                     IFF(
                         NULLIF(TRIM(E.TYPEDESCRIPTION), '') IS NOT NULL
                         AND T.MHA_EVENTTYPEID IS NULL,
-                        'mha_eventtype',
+                        IFF(T.ID_CONFLICT, 'mha_eventtype_id_conflict', 'mha_eventtype'),
+                        NULL
+                    ),
+                    IFF(
+                        NULLIF(TRIM(E.CATEGORY), '') IS NOT NULL
+                        AND EC.MHNAS_EVENTCATEGORYID IS NULL,
+                        'mhnas_eventcategory',
                         NULL
                     )
                 ),
@@ -139,6 +190,8 @@ MAPPED AS (
         ON E.CAMPAIGNCODE = C.RE_CAMPAIGN_ID
     LEFT JOIN D365_EVENT_TYPES AS T
         ON UPPER(TRIM(E.TYPEDESCRIPTION)) = T.NAME_KEY
+    LEFT JOIN DEV_EVENT_CATEGORIES AS EC
+        ON UPPER(TRIM(E.CATEGORY)) = EC.NAME_KEY
     LEFT JOIN D365_EVENTS AS D
         ON UPPER(TRIM(E.EVENTREF)) = D.CODE_KEY
     CROSS JOIN GATES AS G
@@ -174,6 +227,11 @@ SELECT
             '/mha_eventtypes(' || MHA_EVENTTYPEID || ')',
             NULL
         ),
+        'mhnas_EventCategory@odata.bind', IFF(
+            MHNAS_EVENTCATEGORY_D365_ID IS NOT NULL,
+            '/mhnas_eventcategories(' || MHNAS_EVENTCATEGORY_D365_ID || ')',
+            NULL
+        ),
         'mha_locationtype', MHA_LOCATIONTYPE,
         'mha_targetparticipants', MHA_TARGETPARTICIPANTS,
         'mhnas_uniqueid', MHNAS_UNIQUEID,
@@ -204,5 +262,7 @@ SELECT
     MSNFP_PROPOSEDEND,
     MSNFP_PROPOSEDSTART,
     OVERRIDDENCREATEDON,
-    OWNINGTEAM
+    OWNINGTEAM,
+    RE_EVENT_CATEGORY,
+    MHNAS_EVENTCATEGORY_D365_ID
 FROM MAPPED;
