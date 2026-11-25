@@ -180,3 +180,8 @@ the POST or capture is uncertain, reconcile in Dynamics before any retry.
 After a successful run, verify the live name, Category and XREF; an empty
 request preview alone is not proof of a successful create. The pilot stores
 its identity in XREF, which does not reflect later Dynamics changes/deletions.
+
+## Event Participant DEV pilot
+
+See the [Event Participant DEV handover](EVENT_PARTICIPANT_DEV_HANDOVER.md)
+for the one-row pilot evidence, full-load prerequisites, and business questions.
