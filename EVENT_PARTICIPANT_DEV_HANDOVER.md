@@ -28,8 +28,8 @@ The Raiser’s Edge Event Participant is represented in Dynamics by the
 4. Prepared a single-row request using only confirmed fields. The payload
    included `mha_source = RE`, `mha_sourceid = 115847`, Event and Contact
    bindings, `statecode = 0`, `statuscode = 844060001` (Accepted), and
-   `overriddencreatedon = 2015-12-09`. It intentionally omitted optional or
-   undecided fields.
+   `overriddencreatedon = 2015-12-09`. This was a minimal technical pilot,
+   not a mapping-complete participant record.
 5. Added a local `D365_EVENTPARTICIPANT_PILOT` route to the dispatcher JSON,
    including response-ID selection and XREF capture. The JSON was parsed and
    statically checked. The user reports validating and running the route in
@@ -59,6 +59,40 @@ The pilot request view is deliberately hard-coded to participant `115847`,
 the pilot pipeline ID, and a duplicate check for source ID `115847`. Do not
 remove those filters and use it as a full-load view.
 
+## Alignment with the source-to-target workbook
+
+The local WIP workbook’s Mapping V6 rows 899–952 identify `msnfp_eventpackage`
+as Event Participant. The pilot aligns with key rows for `mha_source`,
+`mha_sourceid`, Customer, Event, `statecode`, `statuscode`, and
+`overriddencreatedon`.
+
+The pilot’s `Accepted` status code is present in the workbook’s status list.
+However, the workbook lists the `statuscode` source as Event Participant /
+Participation, while the pilot logic prefers RE `STATUSDESCRIPTION` and only
+falls back to `PARTICIPATIONDESCRIPTION` for selected values. The candidate
+had `STATUS = Accepted` and `PARTICIPATION = Delegate`, so the pilot sent
+Accepted. Confirm the intended source-field precedence with the mapping owner
+before scaling.
+
+However, the workbook’s “Required field for migration/sync” column also marks
+many fields omitted from the pilot as `Y`. Examples include Identifier, Date,
+Appeal, Campaign, Package, Primary Participant, Response Channel, Dietary
+Requirements, Fundraising Target, and participant attributes/new fields. The
+workbook contains unresolved notes for several of these: Identifier may need
+an autonumber or concatenation rule; Date needs an Own Place decision;
+guest/primary participant handling needs review; and participant attributes
+and new fields are linked to DevOps ticket 733. Access Requirements is flagged
+`Y` but also noted as old sensitive data that may not need retaining.
+
+The pilot therefore proves that a minimal create and ID capture can work; it
+does **not** satisfy the workbook’s full migration/sync mapping. The workbook
+flag is not the same as Dataverse create-required metadata: the record was
+accepted without these fields, but that does not make their omission an
+approved migration decision. Resolve each `Y` field with the business and
+mapping owner, including whether it is populated, calculated, held, excluded,
+or handled in another object. Reconcile this WIP workbook against the
+authoritative project mapping before full-load design.
+
 ## Work required before a full load
 
 1. **Agree the population and rerun profiling.** The earlier diagnostic
@@ -77,11 +111,11 @@ remove those filters and use it as a full-load view.
    one Contact and holds account matches, ambiguous links, unresolved
    suppression state, and suppressed constituents. Define handling for
    missing Events, accounts, duplicate Contacts, and privacy holds.
-4. **Agree the full payload.** The pilot omits `msnfp_identifier`,
-   `msnfp_date`, Appeal, Campaign, Package, and participant attributes. Confirm
-   which are required by business rules, how to source/map them, and whether
-   any depend on other objects being loaded first. Do not infer values from
-   technical metadata alone.
+4. **Close workbook-required field decisions.** The workbook flags fields
+   omitted from the pilot as required for migration/sync. Resolve their source
+   mapping, business rule, target dependency, or approved exclusion before
+   building the full request. Do not silently treat an omitted field as
+   optional merely because Dataverse accepted the pilot without it.
 5. **Build a separate full-load preview and request view.** Remove the
    single-record restrictions only in a new full-load design. Retain
    per-record hold reasons, source uniqueness, idempotency checks, target
