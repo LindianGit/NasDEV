@@ -327,6 +327,49 @@ pilot technical/dependency choices, not a workbook amendment.
    deletes, RE retirement/history retention, reconciliation, exceptions
    and business sign-off before full loading.
 
+## Follow-up: missing destination records and dependencies
+
+Revisit this issue before generalising the pilots into full-load routes.
+For an in-scope source object, a missing destination record is a candidate
+for creation, not an automatic migration exclusion. Required missing
+lookup/parent records must be resolved first through an approved migration
+load or their designated owner; do not omit required bindings or assume
+that each child pipeline creates its dependencies.
+
+The review confirmed one explicit own-record creation exception:
+`VW_D365_MHA_CONSENTTYPE` returns EXISTS for matched types and HOLD for
+missing types, with CLIENT_LOADS when no other gate applies. The workbook
+assigns Consent Type loading to mhance. Confirm that ownership and how
+missing types will be supplied; do not silently exclude affected Consents.
+See [Consent Type handover](CONSENT_TYPE_DEV_HANDOVER.md).
+
+Other reviewed pilot routes include POST creation, but fixed-record pilots
+do not establish a general "load every missing record" implementation.
+The count above is not a complete dependency-loading or full-load audit.
+
+Follow-up review must:
+
+- Check each configured object's missing-record creation path and pilot
+  restrictions.
+- Identify required missing references/parents, their loading owner and
+  load order; retain explicit reasons for held records.
+- Verify with a controlled DEV case that a missing in-scope record is
+  created once, dependencies resolve, and a rerun does not duplicate it.
+- Reconcile source, held, existing and created counts before full loading.
+
+Third Party Supporter Reference remains unimplemented; its empty source
+table requires an agreed source-row setup. Postcode now has a user-approved
+synthetic Name-only DEV pilot and dispatcher route. Its deployed request
+returned the expected payload and the user reported success; final target
+readback, tracking and audit reconciliation remain outstanding.
+See [Postcode handover](POSTCODE_DEV_HANDOVER.md). All 2,021,748
+queried RE address rows returned the masked postcode placeholder ********,
+so this pilot does not prove real RE postcode migration. Existing Postcode
+values include areas and districts; confirm the intended record grain and
+obtain an authorised usable source before loading missing RE values.
+Neither destination absence nor existing reference data alone is a
+migration exclusion rule.
+
 ## Next actions
 
 1. Obtain the pending post-run tracking, audit, dispatch-count and Dynamics
@@ -340,6 +383,9 @@ pilot technical/dependency choices, not a workbook amendment.
 4. Resolve business decisions, update mappings/payload logic, and test
    representative cases, controlled batches and failure recovery before
    approving a full DEV load.
+5. Return to the missing-destination/dependency review above. Confirm
+   Consent Type provisioning and review the other configured routes before
+   claiming they migrate all missing in-scope records.
 
 Current manager-facing wording:
 
